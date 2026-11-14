@@ -174,7 +174,7 @@ Rules for this boundary:
 **Producer behaviour**
 
 1. `resource` names the scene file. Width, height and fps come from the MLT profile, so the scene always matches the project.
-2. On each `get_frame`, the producer calls `anicode_reload_if_changed`, which checks the file's modification time. Edits therefore appear on the next frame Shotcut requests.
+2. On each `get_frame`, the producer calls `anicode_reload_if_changed`, which checks the file's modification time. Edits therefore appear on the next frame Shotcut requests. Milestone 0 showed that Shotcut does not redraw by itself while paused, so you step a frame (or scrub) to see the change. M3 tests whether the producer can make Shotcut redraw.
 3. It returns premultiplied RGBA. Shotcut composites it over footage or a background on the track below.
 4. On a script error it keeps showing the last good frame with a red banner that reads `scene.lua:42: attempt to index nil`, so an error never blanks the timeline.
 5. The clip's length comes from the scene's last marker. You can still trim it on the timeline.
@@ -187,7 +187,18 @@ Rules for this boundary:
 </producer></mlt>
 ```
 
-**Plugin install location.** On Debian with the distro Shotcut, the plugin goes in the system MLT module directory, and it matches automatically because Shotcut links the system MLT. On macOS the signed `Shotcut.app` bundles its own MLT 7.38. Whether it will load a module from outside the bundle without breaking code signing is unverified. Milestone 0 tests this first; see Risks for the fallback.
+**Plugin install location.** On Debian with the distro Shotcut, the plugin goes in the system MLT module directory, and it matches automatically because Shotcut links the system MLT. On macOS the signed `Shotcut.app` (26.9.28) bundles its own MLT 7.41 and only loads modules from its own `Contents/PlugIns/mlt` folder. It ignores `MLT_REPOSITORY` and `MLT_APPDIR`. Milestone 0 settled on a development copy of the app instead (see below).
+
+**macOS development copy.** Shotcut is signed with `disable-library-validation`, so it loads unsigned modules once they are inside the bundle. Adding a file breaks the bundle signature, so the copy is re-signed locally. Redo these steps after each Shotcut update:
+
+```sh
+ditto /Applications/Shotcut.app ~/Applications/Shotcut-Anicode.app
+xattr -dr com.apple.quarantine ~/Applications/Shotcut-Anicode.app
+ln -sf "$PWD/build/libmltanicode.so" ~/Applications/Shotcut-Anicode.app/Contents/PlugIns/mlt/
+codesign --force --deep --sign - --preserve-metadata=entitlements,flags ~/Applications/Shotcut-Anicode.app
+```
+
+The module is a symlink to the build output, so rebuilding needs no re-signing. `codesign --verify --strict` rejects the symlink because it points outside the bundle, but the app runs. The module is linked with `-undefined dynamic_lookup` on macOS, so it uses Shotcut's MLT and never loads a second copy.
 
 ## Timing and the editing workflow
 
@@ -226,7 +237,7 @@ Both platforms are first-class. The only real difference is how the plugin gets 
 | Lua | LuaJIT via mlua `vendored`; build with `MACOSX_DEPLOYMENT_TARGET` set | LuaJIT via mlua `vendored` |
 | MLT headers to build against | `brew install mlt` | `apt install libmlt-dev libmlt++-dev melt` |
 | Shotcut | official signed universal app | distro package: trixie ships 25.03; forky or sid ships 26.x |
-| Plugin location | to be settled in Milestone 0 | system MLT module directory |
+| Plugin location | re-signed copy of Shotcut.app, module symlinked into `Contents/PlugIns/mlt` | system MLT module directory |
 | Hardware video encode | VideoToolbox, inside Shotcut | VAAPI or NVENC, inside Shotcut |
 
 Keep Shotcut's own GPU effects switched off on macOS. They rely on OpenGL, which Apple has deprecated, and Anicode doesn't need them.
@@ -247,7 +258,7 @@ anicode/
   CMakeLists.txt
 ```
 
-**CI.** GitHub Actions on `macos-14` (arm64) and a Debian container: build, unit tests, golden frames on `vello_cpu`, and a `melt` smoke render of each example.
+**CI.** GitHub Actions on `macos-latest` (arm64; `macos-14` is retired) and a Debian container: build, unit tests, golden frames on `vello_cpu`, and a `melt` smoke render of each example.
 
 ## Milestones
 
@@ -271,13 +282,15 @@ flowchart TD
 
 Each phase ends at a gate you can check yourself. If M0 lands on the proxy fallback, M3 becomes a file watcher that re-renders a ProRes proxy, and the other phases don't change.
 
+**M0 result (Nov 14, 2026).** Gate passed without the proxy fallback. On macOS the plugin loads in a re-signed copy of Shotcut 26.9.28 and draws the test pattern. On Debian trixie (MLT 7.30) it builds and renders with `melt` in CI; the Shotcut window on Linux is not tested yet. After a save, Shotcut shows the new frame on the next scrub or play, but does not redraw while paused.
+
 ## Risks and open questions
 
 The biggest risk is the macOS plugin path, so Milestone 0 tests it before any engine work.
 
 | Risk | Likelihood | Impact | Mitigation |
 | --- | --- | --- | --- |
-| Signed Shotcut.app on macOS won't load an outside MLT module | medium | high | Test in Milestone 0. Fallback 1: launch Shotcut with `MLT_REPOSITORY` pointing to a merged module folder. Fallback 2: `anicode watch` renders a ProRes 4444 proxy on every save and Shotcut reloads the proxy clip. Slower, but it needs no plugin. |
+| Signed Shotcut.app on macOS won't load an outside MLT module | resolved in M0 | high | Confirmed: it only loads from its own bundle, and Fallback 1 does not work. Use the re-signed copy described above. Original plan: Fallback 1: launch Shotcut with `MLT_REPOSITORY` pointing to a merged module folder. Fallback 2: `anicode watch` renders a ProRes 4444 proxy on every save and Shotcut reloads the proxy clip. Slower, but it needs no plugin. |
 | MLT version drift between the plugin and Shotcut's bundled MLT | medium | medium | Build against the same MLT 7.x minor version Shotcut ships. Check the version at module load and show a clear error. |
 | Reading markers from the saved project file is fragile | medium | medium | Treat the project file as read-only input, and parse defensively. Fallback: a `fuzz.markers.lua` table edited by hand. |
 | Preview too slow when scrubbing dense scenes | low | medium | Use `vello_cpu` for preview at half resolution and the GPU path for export. Cache static subtrees. |
@@ -288,7 +301,7 @@ The biggest risk is the macOS plugin path, so Milestone 0 tests it before any en
 
 **Open questions**
 
-- Does Shotcut re-request frames from a producer when the file changes on disk, or does Anicode need to signal it? Settle this in Milestone 0.
+- Does Shotcut re-request frames from a producer when the file changes on disk, or does Anicode need to signal it? Answered in M0: it only re-requests on scrub or play, so Anicode needs to signal it. Still open: whether firing an MLT event from the producer makes Shotcut redraw. Test this in M3.
 - Should the engine have its own preview window, using `anicode-cli`, for quick looping without Shotcut? It's cheap to keep.
 - Audio cues from scenes (whooshes and clicks): put them on Shotcut's timeline by hand, or have Anicode export marker-aligned cue files?
 
