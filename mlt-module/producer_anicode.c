@@ -83,12 +83,14 @@ mlt_producer producer_anicode_init(mlt_profile profile, mlt_service_type type, c
     if (anicode_last_error(engine)[0] != '\0')
         log_error(producer, engine);
 
-    // The last frame shows the end state, so the clip is one frame longer than the scene.
+    // Shotcut saves a clip's length and will not stretch a clip past it, but
+    // moving markers can make the scene longer. So, like MLT's color
+    // producer, allow four hours and set the default out point to the scene's
+    // end. The last frame shows the end state, hence the extra frame.
+    double fps = mlt_profile_fps(profile);
+    mlt_properties_set_position(properties, "length", (int) lround(4 * 60 * 60 * fps));
     double duration = anicode_duration(engine);
-    if (duration > 0) {
-        int length = (int) lround(duration * mlt_profile_fps(profile)) + 1;
-        mlt_properties_set_position(properties, "length", length);
-        mlt_properties_set_position(properties, "out", length - 1);
-    }
+    if (duration > 0)
+        mlt_properties_set_position(properties, "out", (int) lround(duration * fps));
     return producer;
 }
