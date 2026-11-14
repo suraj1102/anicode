@@ -1,0 +1,4 @@
+[env]
+# The vendored LuaJIT build reads this. Without it, the library targets the
+# build machine's macOS version and may not load into older Shotcut hosts.
+MACOSX_DEPLOYMENT_TARGET = "13.0"

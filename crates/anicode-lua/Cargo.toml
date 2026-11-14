@@ -2,3 +2,7 @@
 name = "anicode-lua"
 version.workspace = true
 edition.workspace = true
+
+[dependencies]
+anicode-core = { version = "0.1.0", path = "../anicode-core" }
+mlua = { version = "0.12.2", features = ["luajit", "vendored"] }
