@@ -1,0 +1,3 @@
+<mlt><producer id="basics" mlt_service="anicode">
+  <property name="resource">basics.lua</property>
+</producer></mlt>

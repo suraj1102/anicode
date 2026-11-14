@@ -1,50 +1,27 @@
 #include <framework/mlt.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <sys/stat.h>
+#include <math.h>
 
-// M0 spike: draws a test pattern (color bars with a white bar that moves
-// one column per frame) so we can see that Shotcut loads the module and
-// requests new frames. The bars shift each time the scene file is saved,
-// to test whether Shotcut picks up file changes.
+#include "anicode.h"
 
-static const uint8_t BAR_COLORS[][3] = {
-    {255, 255, 255}, {255, 255, 0}, {0, 255, 255}, {0, 255, 0},
-    {255, 0, 255},   {255, 0, 0},   {0, 0, 255},
-};
-static const int BAR_COUNT = sizeof(BAR_COLORS) / sizeof(BAR_COLORS[0]);
+// The `anicode` producer: renders a Lua scene with the Rust engine. The scene
+// reloads when its file changes, so edits show on the next frame requested.
 
-// Changes whenever the file's modification time changes.
-static int bar_shift_for_file(const char *path)
+static anicode_engine *engine_of(mlt_producer producer)
 {
-    struct stat info;
-    if (path == NULL || stat(path, &info) != 0)
-        return 0;
-    return info.st_mtime % BAR_COUNT;
+    return mlt_properties_get_data(MLT_PRODUCER_PROPERTIES(producer), "_anicode", NULL);
 }
 
-static void draw_test_pattern(uint8_t *rgba, int width, int height, mlt_position position,
-                              int bar_shift)
+static void log_error(mlt_producer producer, anicode_engine *engine)
 {
-    int moving_column = position % width;
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            uint8_t *pixel = rgba + (y * width + x) * 4;
-            const uint8_t *color = BAR_COLORS[(x * BAR_COUNT / width + bar_shift) % BAR_COUNT];
-            int is_moving_bar = abs(x - moving_column) < 8;
-            pixel[0] = is_moving_bar ? 255 : color[0] / 2;
-            pixel[1] = is_moving_bar ? 255 : color[1] / 2;
-            pixel[2] = is_moving_bar ? 255 : color[2] / 2;
-            pixel[3] = 255;
-        }
-    }
+    mlt_log_error(MLT_PRODUCER_SERVICE(producer), "%s\n", anicode_last_error(engine));
 }
 
 static int get_image(mlt_frame frame, uint8_t **buffer, mlt_image_format *format, int *width,
                      int *height, int writable)
 {
     mlt_producer producer = mlt_frame_pop_service(frame);
-    mlt_profile profile = mlt_service_profile(MLT_PRODUCER_SERVICE(producer));
+    mlt_service service = MLT_PRODUCER_SERVICE(producer);
+    mlt_profile profile = mlt_service_profile(service);
     if (*width <= 0)
         *width = profile->width;
     if (*height <= 0)
@@ -52,9 +29,18 @@ static int get_image(mlt_frame frame, uint8_t **buffer, mlt_image_format *format
 
     int size = *width * *height * 4;
     uint8_t *rgba = mlt_pool_alloc(size);
-    const char *scene_path = mlt_properties_get(MLT_PRODUCER_PROPERTIES(producer), "resource");
-    draw_test_pattern(rgba, *width, *height, mlt_frame_original_position(frame),
-                      bar_shift_for_file(scene_path));
+    // The frame position counts from the clip's in-point, not from the scene start.
+    mlt_position position = mlt_frame_original_position(frame) + mlt_producer_get_in(producer);
+    double time = position / mlt_profile_fps(profile);
+
+    // MLT may ask for frames from several threads; the engine is not thread safe.
+    mlt_service_lock(service);
+    anicode_engine *engine = engine_of(producer);
+    if (anicode_reload_if_changed(engine) < 0)
+        log_error(producer, engine);
+    if (anicode_render(engine, time, *width, *height, rgba, *width * 4) < 0)
+        log_error(producer, engine);
+    mlt_service_unlock(service);
 
     mlt_frame_set_image(frame, rgba, size, mlt_pool_release);
     *buffer = rgba;
@@ -79,10 +65,30 @@ static int get_frame(mlt_producer producer, mlt_frame_ptr frame, int index)
 
 mlt_producer producer_anicode_init(mlt_profile profile, mlt_service_type type, const char *id, char *arg)
 {
-    mlt_producer producer = mlt_producer_new(profile);
-    if (producer == NULL)
+    if (arg == NULL)
         return NULL;
+    anicode_engine *engine = anicode_open(arg);
+    if (engine == NULL)
+        return NULL;
+    mlt_producer producer = mlt_producer_new(profile);
+    if (producer == NULL) {
+        anicode_close(engine);
+        return NULL;
+    }
     producer->get_frame = get_frame;
-    mlt_properties_set(MLT_PRODUCER_PROPERTIES(producer), "resource", arg);
+
+    mlt_properties properties = MLT_PRODUCER_PROPERTIES(producer);
+    mlt_properties_set(properties, "resource", arg);
+    mlt_properties_set_data(properties, "_anicode", engine, 0, (mlt_destructor) anicode_close, NULL);
+    if (anicode_last_error(engine)[0] != '\0')
+        log_error(producer, engine);
+
+    // The last frame shows the end state, so the clip is one frame longer than the scene.
+    double duration = anicode_duration(engine);
+    if (duration > 0) {
+        int length = (int) lround(duration * mlt_profile_fps(profile)) + 1;
+        mlt_properties_set_position(properties, "length", length);
+        mlt_properties_set_position(properties, "out", length - 1);
+    }
     return producer;
 }

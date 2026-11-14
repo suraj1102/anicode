@@ -17,7 +17,12 @@ melt -query producers | grep -q -- "- anicode" || { echo "anicode producer not f
 
 for scene in examples/*.mlt; do
     name=$(basename "$scene" .mlt)
-    melt "$scene" out=29 -consumer avformat:"$out_dir/$name.mov" vcodec=prores_ks
+    melt "$scene" out=29 -consumer avformat:"$out_dir/$name.mov" vcodec=prores_ks 2>"$out_dir/$name.log"
     test -s "$out_dir/$name.mov" || { echo "$name: no output"; exit 1; }
+    # Script errors are logged, not fatal, so look for them.
+    if grep -q "producer anicode" "$out_dir/$name.log"; then
+        grep -A1 "producer anicode" "$out_dir/$name.log"
+        exit 1
+    fi
     echo "$name: ok"
 done

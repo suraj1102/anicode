@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.22)
 project(anicode C)
 # Writes build/compile_commands.json so clangd finds the MLT headers.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Debug builds of the engine are too slow to scrub in Shotcut.
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
 
 include(FetchContent)
 FetchContent_Declare(
@@ -10,7 +14,7 @@ FetchContent_Declare(
     GIT_TAG v0.6.1
 )
 FetchContent_MakeAvailable(Corrosion)
-corrosion_import_crate(MANIFEST_PATH Cargo.toml)
+corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES anicode-ffi anicode-cli)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(MLT REQUIRED mlt-framework-7)
@@ -20,6 +24,7 @@ add_library(mltanicode MODULE
     mlt-module/producer_anicode.c
 )
 target_include_directories(mltanicode PRIVATE ${MLT_INCLUDE_DIRS})
+target_link_libraries(mltanicode PRIVATE anicode_ffi)
 # MLT modules are always .so, also on macOS.
 set_target_properties(mltanicode PROPERTIES PREFIX "lib" SUFFIX ".so")
 
