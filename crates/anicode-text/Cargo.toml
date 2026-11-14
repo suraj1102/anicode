@@ -1,0 +1,4 @@
+[package]
+name = "anicode-text"
+version.workspace = true
+edition.workspace = true

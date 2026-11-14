@@ -1,0 +1,4 @@
+[package]
+name = "anicode-lua"
+version.workspace = true
+edition.workspace = true

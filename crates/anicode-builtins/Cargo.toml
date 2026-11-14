@@ -1,0 +1,4 @@
+[package]
+name = "anicode-builtins"
+version.workspace = true
+edition.workspace = true
