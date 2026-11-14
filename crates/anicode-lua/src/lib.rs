@@ -39,7 +39,11 @@ impl Engine {
     ) -> Result<Engine, String> {
         let source = std::fs::read_to_string(path)
             .map_err(|error| format!("{}: {error}", path.display()))?;
-        let module_dir = path.parent().unwrap_or(Path::new("."));
+        // A bare file name has an empty parent, which would make `require`
+        // search the filesystem root.
+        let absolute =
+            std::path::absolute(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let module_dir = absolute.parent().unwrap_or(Path::new("/"));
         Engine::from_source(
             &source,
             &path.display().to_string(),
