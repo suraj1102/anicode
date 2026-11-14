@@ -11,6 +11,9 @@ const CONFIG_FILE: &str = "config/anicode.toml";
 
 #[derive(Deserialize)]
 pub struct Config {
+    /// The folder that holds config/anicode.toml.
+    #[serde(skip)]
+    pub root: PathBuf,
     pub render: RenderConfig,
     pub timing: TimingConfig,
     pub golden: GoldenConfig,
@@ -43,7 +46,15 @@ impl Config {
     pub fn load(path: &Path) -> Result<Config, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|error| format!("{}: {error}", path.display()))?;
-        toml::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))
+        let mut config: Config =
+            toml::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))?;
+        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        config.root = absolute
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new("/"))
+            .to_path_buf();
+        Ok(config)
     }
 
     /// Loads the config of the project a scene belongs to: the nearest

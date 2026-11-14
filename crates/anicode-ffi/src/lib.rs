@@ -10,12 +10,17 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+mod shotcut;
+
 use anicode_lua::{Config, Engine, Settings};
 use anicode_render::{CpuRenderer, ImageAlphaType};
 
 pub struct AnicodeEngine {
     scene: PathBuf,
-    modified: Option<SystemTime>,
+    scene_modified: Option<SystemTime>,
+    /// The Shotcut project whose markers time the scene, if one was found.
+    project: Option<PathBuf>,
+    project_modified: Option<SystemTime>,
     /// The last scene that loaded without errors. Kept when an edit breaks
     /// the script, so the clip keeps showing something.
     loaded: Option<(Engine, Config)>,
@@ -24,15 +29,17 @@ pub struct AnicodeEngine {
 }
 
 impl AnicodeEngine {
+    /// Reloads when the scene file or the Shotcut project changes. Saving
+    /// the project after moving a marker therefore re-times the scene.
     fn reload_if_changed(&mut self) -> c_int {
-        let modified = std::fs::metadata(&self.scene)
-            .and_then(|metadata| metadata.modified())
-            .ok();
-        if modified.is_some() && modified == self.modified {
+        let scene_modified = modified_time(&self.scene);
+        let scene_changed = scene_modified.is_none() || scene_modified != self.scene_modified;
+        let project_modified = self.project.as_deref().and_then(modified_time);
+        if !scene_changed && project_modified == self.project_modified {
             return 0;
         }
-        self.modified = modified;
-        match load(&self.scene) {
+        self.scene_modified = scene_modified;
+        match self.load(scene_changed) {
             Ok(loaded) => {
                 self.loaded = Some(loaded);
                 self.set_error("");
@@ -43,6 +50,26 @@ impl AnicodeEngine {
                 -1
             }
         }
+    }
+
+    fn load(&mut self, scene_changed: bool) -> Result<(Engine, Config), String> {
+        let config = Config::find_for(&self.scene)?;
+        // Searching for the project walks the folders, so only do it when
+        // the scene itself changes (or opens).
+        if scene_changed {
+            self.project = shotcut::find_project(&config.root, &self.scene);
+        }
+        self.project_modified = self.project.as_deref().and_then(modified_time);
+        let markers = match &self.project {
+            Some(project) => shotcut::clip_markers(project, &self.scene)?,
+            None => HashMap::new(),
+        };
+        let settings = Settings {
+            frame_height: config.render.frame_height,
+            default_block_seconds: config.timing.default_block_seconds,
+        };
+        let engine = Engine::load(&self.scene, &markers, settings)?;
+        Ok((engine, config))
     }
 
     /// Returns -1 when a new error appears, so the caller logs it once
@@ -119,14 +146,10 @@ fn draw_error_bar(rgba: &mut [u8], width: u16, height: u16, stride: usize) {
     }
 }
 
-fn load(scene: &Path) -> Result<(Engine, Config), String> {
-    let config = Config::find_for(scene)?;
-    let settings = Settings {
-        frame_height: config.render.frame_height,
-        default_block_seconds: config.timing.default_block_seconds,
-    };
-    let engine = Engine::load(scene, &HashMap::new(), settings)?;
-    Ok((engine, config))
+fn modified_time(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
 }
 
 fn guard<T>(fallback: T, body: impl FnOnce() -> T) -> T {
@@ -148,7 +171,9 @@ pub unsafe extern "C" fn anicode_open(scene_path: *const c_char) -> *mut Anicode
         };
         let mut engine = AnicodeEngine {
             scene: PathBuf::from(path),
-            modified: None,
+            scene_modified: None,
+            project: None,
+            project_modified: None,
             loaded: None,
             renderer: None,
             last_error: CString::default(),
@@ -272,6 +297,55 @@ mod tests {
         assert_eq!(status, 0, "{}", error(engine));
         assert!(rgba.chunks(4).any(|pixel| pixel[3] == 255));
         unsafe { anicode_close(engine) };
+    }
+
+    #[test]
+    fn shotcut_markers_time_the_scene_and_reload_on_save() {
+        let root = std::env::temp_dir().join(format!("anicode-markers-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        std::fs::copy(
+            repo.join("config/anicode.toml"),
+            root.join("config/anicode.toml"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("shape.lua"),
+            "local c = Circle {}\nat \"intro\" { fade_in(c) }\nat \"move\" { c:shift(UP) }\n",
+        )
+        .unwrap();
+        let project = root.join("edit.mlt");
+        let xml = include_str!("../tests/fixtures/shotcut-26.9.mlt");
+        std::fs::write(&project, xml).unwrap();
+
+        let engine = open(root.join("shape.lua").to_str().unwrap());
+        // "move" is at 3.96 s on the timeline and the clip starts at 1.08 s.
+        let duration = unsafe { anicode_duration(engine) };
+        assert!(
+            (duration - (2.88 + 2.0)).abs() < 1e-9,
+            "{duration} {}",
+            error(engine)
+        );
+
+        // Move the marker to 5.08 s and save; the next frame picks it up.
+        std::fs::write(
+            &project,
+            xml.replace("00:00:03.960</property>", "00:00:05.080</property>"),
+        )
+        .unwrap();
+        let later = SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&project)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert_eq!(unsafe { anicode_reload_if_changed(engine) }, 1);
+        let duration = unsafe { anicode_duration(engine) };
+        assert!((duration - (4.0 + 2.0)).abs() < 1e-9, "{duration}");
+
+        unsafe { anicode_close(engine) };
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

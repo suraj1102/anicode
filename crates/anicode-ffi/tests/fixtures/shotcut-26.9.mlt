@@ -1,0 +1,144 @@
+<?xml version="1.0" standalone="no"?>
+<mlt LC_NUMERIC="C" version="7.41.0" title="Shotcut version 26.9.28" producer="main_bin">
+  <profile description="PAL 4:3 DV or DVD" width="1920" height="1080" progressive="1" sample_aspect_num="1" sample_aspect_den="1" display_aspect_num="16" display_aspect_den="9" frame_rate_num="25" frame_rate_den="1" colorspace="709"/>
+  <playlist id="main_bin">
+    <property name="shotcut:colorTransfer"></property>
+    <property name="xml_retain">1</property>
+  </playlist>
+  <producer id="black" in="00:00:00.000" out="00:00:09.960">
+    <property name="length">00:00:10.000</property>
+    <property name="eof">pause</property>
+    <property name="resource">0</property>
+    <property name="aspect_ratio">1</property>
+    <property name="mlt_service">color</property>
+    <property name="mlt_image_format">rgba</property>
+    <property name="set.test_audio">0</property>
+  </producer>
+  <playlist id="background">
+    <entry producer="black" in="00:00:00.000" out="00:00:09.960"/>
+  </playlist>
+  <producer id="producer0" in="00:00:00.000" out="03:59:59.960">
+    <property name="length">04:00:00.000</property>
+    <property name="eof">pause</property>
+    <property name="resource">#FF000000</property>
+    <property name="aspect_ratio">1</property>
+    <property name="mlt_service">color</property>
+    <property name="mlt_image_format">rgba</property>
+    <property name="shotcut:caption">#FF000000</property>
+    <property name="shotcut:detail">#FF000000</property>
+    <property name="ignore_points">0</property>
+    <property name="xml">was here</property>
+    <property name="seekable">1</property>
+  </producer>
+  <playlist id="playlist0">
+    <property name="shotcut:video">1</property>
+    <property name="shotcut:name">V1</property>
+    <entry producer="producer0" in="00:00:00.000" out="00:00:09.960"/>
+    <filter id="filter0">
+      <property name="iec_scale">1</property>
+      <property name="prefix">meta.audio.track.1.audio_level.</property>
+      <property name="mlt_service">audiolevel</property>
+      <property name="shotcut:filter">audioLevel</property>
+      <property name="shotcut:hidden">1</property>
+      <property name="shotcut:hiddenPosition">post</property>
+    </filter>
+  </playlist>
+  <producer id="shape" in="00:00:00.000" out="00:00:04.000">
+    <property name="length">00:00:04.040</property>
+    <property name="eof">pause</property>
+    <property name="resource">shape.lua</property>
+    <property name="aspect_ratio">1</property>
+    <property name="mlt_service">anicode</property>
+    <property name="xml">was here</property>
+    <property name="seekable">1</property>
+    <property name="shotcut:skipConvert">0</property>
+    <property name="shotcut:hash">55fb367dd84cd3868d6490a0eb49ffa1</property>
+    <property name="ignore_points">0</property>
+  </producer>
+  <playlist id="playlist1">
+    <property name="shotcut:video">1</property>
+    <property name="shotcut:name">V2</property>
+    <blank length="00:00:01.080"/>
+    <entry producer="shape" in="00:00:00.000" out="00:00:03.960"/>
+    <filter id="filter1">
+      <property name="iec_scale">1</property>
+      <property name="prefix">meta.audio.track.2.audio_level.</property>
+      <property name="mlt_service">audiolevel</property>
+      <property name="shotcut:filter">audioLevel</property>
+      <property name="shotcut:hidden">1</property>
+      <property name="shotcut:hiddenPosition">post</property>
+    </filter>
+  </playlist>
+  <tractor id="tractor0" title="Shotcut version 26.9.28" in="00:00:00.000" out="00:00:09.960">
+    <property name="shotcut:colorTransfer"></property>
+    <property name="shotcut">1</property>
+    <property name="shotcut:projectAudioChannels">2</property>
+    <property name="shotcut:projectFolder">0</property>
+    <property name="shotcut:processingMode">Native8Cpu</property>
+    <properties name="shotcut:markers">
+      <properties name="0">
+        <property name="text">move</property>
+        <property name="start">00:00:03.960</property>
+        <property name="end">00:00:03.960</property>
+        <property name="color">#008000</property>
+      </properties>
+      <properties name="1">
+        <property name="text">intro</property>
+        <property name="start">00:00:01.080</property>
+        <property name="end">00:00:01.080</property>
+        <property name="color">#008000</property>
+      </properties>
+    </properties>
+    <track producer="background"/>
+    <track producer="playlist0"/>
+    <track producer="playlist1"/>
+    <transition id="transition0">
+      <property name="a_track">0</property>
+      <property name="b_track">1</property>
+      <property name="compositing">0</property>
+      <property name="distort">0</property>
+      <property name="rotate_center">0</property>
+      <property name="mlt_service">qtblend</property>
+      <property name="threads">0</property>
+      <property name="disable">1</property>
+    </transition>
+    <transition id="transition1">
+      <property name="a_track">1</property>
+      <property name="b_track">2</property>
+      <property name="compositing">0</property>
+      <property name="distort">0</property>
+      <property name="rotate_center">0</property>
+      <property name="mlt_service">qtblend</property>
+      <property name="threads">0</property>
+      <property name="disable">0</property>
+    </transition>
+    <transition id="transition2">
+      <property name="a_track">0</property>
+      <property name="b_track">2</property>
+      <property name="duck_threshold">0</property>
+      <property name="duck_attenuation">-12</property>
+      <property name="duck_level">0</property>
+      <property name="duck_fade_in">1500</property>
+      <property name="duck_fade_out">250</property>
+      <property name="prefix">meta.audio.track.2.</property>
+      <property name="mlt_service">mix</property>
+      <property name="always_active">1</property>
+      <property name="sum">1</property>
+    </transition>
+    <transition id="transition3">
+      <property name="a_track">0</property>
+      <property name="b_track">1</property>
+      <property name="duck_threshold">0</property>
+      <property name="duck_attenuation">-12</property>
+      <property name="duck_level">0</property>
+      <property name="duck_fade_in">1500</property>
+      <property name="duck_fade_out">250</property>
+      <property name="prefix">meta.audio.track.1.</property>
+      <property name="mlt_service">mix</property>
+      <property name="always_active">1</property>
+      <property name="sum">1</property>
+      <property name="shotcut:duck_threshold">-12</property>
+      <property name="shotcut:duck_enabled">0</property>
+    </transition>
+  </tractor>
+</mlt>
