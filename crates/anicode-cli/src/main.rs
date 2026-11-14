@@ -30,6 +30,8 @@ enum Command {
         #[arg(long, default_value = "config/anicode.toml")]
         config: PathBuf,
     },
+    /// Write the .mlt file that Shotcut opens as a clip for a scene.
+    New { scene: PathBuf },
 }
 
 enum Renderer {
@@ -38,14 +40,17 @@ enum Renderer {
 }
 
 fn main() -> ExitCode {
-    let Command::Render {
-        scene,
-        out,
-        frames,
-        gpu,
-        config,
-    } = Cli::parse().command;
-    match render(&scene, &out, frames.as_deref(), gpu, &config) {
+    let result = match Cli::parse().command {
+        Command::Render {
+            scene,
+            out,
+            frames,
+            gpu,
+            config,
+        } => render(&scene, &out, frames.as_deref(), gpu, &config),
+        Command::New { scene } => write_wrapper(&scene),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
@@ -120,4 +125,32 @@ fn parse_range(range: &str) -> Result<(u32, u32), String> {
 fn write_png(pixmap: Pixmap, path: &Path) -> Result<(), String> {
     let png = pixmap.into_png().map_err(|error| error.to_string())?;
     std::fs::write(path, png).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn write_wrapper(scene: &Path) -> Result<(), String> {
+    if !scene.is_file() {
+        return Err(format!("{}: no such scene file", scene.display()));
+    }
+    let wrapper = scene.with_extension("mlt");
+    if wrapper.exists() {
+        return Err(format!("{} already exists", wrapper.display()));
+    }
+    let id = xml_escape(&scene.file_stem().unwrap_or_default().to_string_lossy());
+    // The resource is relative, so the project folder can move.
+    let resource = xml_escape(&scene.file_name().unwrap_or_default().to_string_lossy());
+    let xml = format!(
+        "<mlt><producer id=\"{id}\" mlt_service=\"anicode\">\n  <property name=\"resource\">{resource}</property>\n</producer></mlt>\n"
+    );
+    std::fs::write(&wrapper, xml).map_err(|error| format!("{}: {error}", wrapper.display()))?;
+    println!(
+        "wrote {}; drag it onto the Shotcut timeline",
+        wrapper.display()
+    );
+    Ok(())
+}
+
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('"', "&quot;")
 }
