@@ -1,0 +1,23 @@
+# Build output (Cargo and CMake)
+/target
+/build
+
+# Secrets
+.env
+.env.*
+
+# clangd index
+.cache/
+
+# Editors
+.vscode/
+.idea/
+.zed/
+*.swp
+*~
+
+# Per-user Claude Code settings
+.claude/settings.local.json
+
+# macOS
+.DS_Store
