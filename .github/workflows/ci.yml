@@ -6,9 +6,9 @@ on:
 
 jobs:
   macos:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: brew install mlt ninja
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -30,7 +30,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential ca-certificates cmake curl git ninja-build pkg-config \
             libmlt-dev melt
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.100.0
