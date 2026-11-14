@@ -35,12 +35,9 @@ version = "0.1.0"
 name = "anicode-cli"
 version = "0.1.0"
 dependencies = [
- "anicode-core",
  "anicode-lua",
  "anicode-render",
  "clap",
- "serde",
- "toml",
 ]
 
 [[package]]
@@ -53,6 +50,10 @@ dependencies = [
 [[package]]
 name = "anicode-ffi"
 version = "0.1.0"
+dependencies = [
+ "anicode-lua",
+ "anicode-render",
+]
 
 [[package]]
 name = "anicode-lua"
@@ -60,6 +61,8 @@ version = "0.1.0"
 dependencies = [
  "anicode-core",
  "mlua",
+ "serde",
+ "toml",
 ]
 
 [[package]]

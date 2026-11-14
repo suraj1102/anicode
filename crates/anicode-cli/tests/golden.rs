@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-use anicode_cli::{Config, load_scene};
+use anicode_lua::{Config, load_scene};
 use anicode_render::{CpuRenderer, Pixmap};
 
 fn repo_root() -> PathBuf {

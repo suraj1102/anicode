@@ -1,3 +1,0 @@
-<mlt><producer id="test_pattern" mlt_service="anicode">
-  <property name="resource">test_pattern.lua</property>
-</producer></mlt>

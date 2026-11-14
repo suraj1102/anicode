@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use anicode_cli::{Config, load_scene};
+use anicode_lua::{Config, load_scene};
 use anicode_render::{CpuRenderer, GpuRenderer, Pixmap};
 use clap::{Parser, Subcommand};
 

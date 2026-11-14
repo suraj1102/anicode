@@ -1,1 +1,0 @@
--- Placeholder scene for the M0 reload test. Save this file to shift the bars.

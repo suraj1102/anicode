@@ -6,3 +6,5 @@ edition.workspace = true
 [dependencies]
 anicode-core = { version = "0.1.0", path = "../anicode-core" }
 mlua = { version = "0.12.2", features = ["luajit", "vendored"] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.1"

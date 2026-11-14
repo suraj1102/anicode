@@ -1,6 +1,9 @@
 //! Runs a Lua scene file and evaluates it at any point in time.
 
 mod bindings;
+mod config;
+
+pub use config::{Config, load_scene};
 
 use std::collections::HashMap;
 use std::path::Path;

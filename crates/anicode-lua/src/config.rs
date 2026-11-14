@@ -1,10 +1,13 @@
-//! Shared by the `anicode` command and the golden-frame tests.
+//! Settings from config/anicode.toml.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anicode_lua::{Engine, Settings};
 use serde::Deserialize;
+
+use crate::{Engine, Settings};
+
+const CONFIG_FILE: &str = "config/anicode.toml";
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -41,6 +44,24 @@ impl Config {
         let text = std::fs::read_to_string(path)
             .map_err(|error| format!("{}: {error}", path.display()))?;
         toml::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))
+    }
+
+    /// Loads the config of the project a scene belongs to: the nearest
+    /// config/anicode.toml in the scene's folder or any folder above it.
+    pub fn find_for(scene: &Path) -> Result<Config, String> {
+        let scene = std::path::absolute(scene).unwrap_or_else(|_| PathBuf::from(scene));
+        let path = scene
+            .ancestors()
+            .skip(1)
+            .map(|folder| folder.join(CONFIG_FILE))
+            .find(|path| path.is_file())
+            .ok_or_else(|| {
+                format!(
+                    "no {CONFIG_FILE} found in the folders above {}",
+                    scene.display()
+                )
+            })?;
+        Config::load(&path)
     }
 }
 
