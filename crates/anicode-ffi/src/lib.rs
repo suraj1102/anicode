@@ -45,6 +45,8 @@ impl AnicodeEngine {
         }
     }
 
+    /// Returns -1 when a new error appears, so the caller logs it once
+    /// rather than on every frame.
     fn render(
         &mut self,
         time: f64,
@@ -53,18 +55,32 @@ impl AnicodeEngine {
         rgba: &mut [u8],
         stride: usize,
     ) -> c_int {
+        let mut status = 0;
+        if let Err(error) = self.draw(time, width, height, rgba, stride) {
+            rgba.fill(0);
+            if self.set_error(&error) {
+                status = -1;
+            }
+        }
+        if !self.last_error.is_empty() {
+            draw_error_bar(rgba, width, height, stride);
+        }
+        status
+    }
+
+    fn draw(
+        &mut self,
+        time: f64,
+        width: u16,
+        height: u16,
+        rgba: &mut [u8],
+        stride: usize,
+    ) -> Result<(), String> {
         let Some((engine, config)) = &self.loaded else {
             rgba.fill(0);
-            return -1;
+            return Ok(());
         };
-        let items = match engine.display_list(time, width.into(), height.into()) {
-            Ok(items) => items,
-            Err(error) => {
-                self.set_error(&error);
-                rgba.fill(0);
-                return -1;
-            }
-        };
+        let items = engine.display_list(time, width.into(), height.into())?;
 
         let renderer = match &mut self.renderer {
             Some(renderer) if (renderer.width(), renderer.height()) == (width, height) => renderer,
@@ -79,11 +95,27 @@ impl AnicodeEngine {
         for (row, target) in pixels.chunks(row_bytes).zip(rgba.chunks_mut(stride)) {
             target[..row_bytes].copy_from_slice(row);
         }
-        0
+        Ok(())
     }
 
-    fn set_error(&mut self, error: &str) {
-        self.last_error = CString::new(error.replace('\0', " ")).unwrap_or_default();
+    /// Returns whether the error text changed.
+    fn set_error(&mut self, error: &str) -> bool {
+        let error = CString::new(error.replace('\0', " ")).unwrap_or_default();
+        let changed = error != self.last_error;
+        self.last_error = error;
+        changed
+    }
+}
+
+/// A red bar across the top of the frame while the scene has an error. The
+/// message itself goes to the log until the engine can draw text.
+fn draw_error_bar(rgba: &mut [u8], width: u16, height: u16, stride: usize) {
+    const RED: [u8; 4] = [220, 40, 40, 255];
+    let bar_rows = (usize::from(height) / 30).max(4);
+    for row in rgba.chunks_mut(stride).take(bar_rows) {
+        for pixel in row[..usize::from(width) * 4].chunks_mut(4) {
+            pixel.copy_from_slice(&RED);
+        }
     }
 }
 
@@ -246,12 +278,11 @@ mod tests {
     fn script_errors_are_reported_not_raised() {
         let engine = open("/no/such/scene.lua");
         assert!(error(engine).contains("scene.lua"), "{}", error(engine));
-        let mut rgba = vec![1u8; 4 * 4 * 4];
-        assert_eq!(
-            unsafe { anicode_render(engine, 0.0, 4, 4, rgba.as_mut_ptr(), 16) },
-            -1
-        );
-        assert!(rgba.iter().all(|&byte| byte == 0));
+        let mut rgba = vec![1u8; 8 * 8 * 4];
+        unsafe { anicode_render(engine, 0.0, 8, 8, rgba.as_mut_ptr(), 32) };
+        // An error bar on top, transparent below it.
+        assert_eq!(&rgba[..4], &[220, 40, 40, 255]);
+        assert!(rgba[8 * 4 * 4..].iter().all(|&byte| byte == 0));
         unsafe { anicode_close(engine) };
     }
 }
