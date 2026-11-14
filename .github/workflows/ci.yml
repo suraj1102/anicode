@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install mlt ninja
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo test --workspace
+      - run: cmake -S . -B build -G Ninja
+      - run: cmake --build build
+      - run: scripts/melt-smoke.sh
+
+  debian:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates cmake curl git ninja-build pkg-config \
+            libmlt-dev melt
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo test --workspace
+      - run: cmake -S . -B build -G Ninja
+      - run: cmake --build build
+      - run: scripts/melt-smoke.sh
