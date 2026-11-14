@@ -2,6 +2,11 @@
 /target
 /build
 
+# Program output
+/frames
+/run
+/output
+
 # Secrets
 .env
 .env.*
