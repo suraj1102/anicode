@@ -7,3 +7,4 @@ mod gpu;
 pub use cpu::CpuRenderer;
 pub use gpu::GpuRenderer;
 pub use vello_cpu::Pixmap;
+pub use vello_cpu::peniko::ImageAlphaType;

@@ -26,6 +26,14 @@ impl CpuRenderer {
         }
     }
 
+    pub fn width(&self) -> u16 {
+        self.width
+    }
+
+    pub fn height(&self) -> u16 {
+        self.height
+    }
+
     pub fn render(&mut self, items: &[DrawItem], background: Color) -> Pixmap {
         let context = &mut self.context;
         context.reset();

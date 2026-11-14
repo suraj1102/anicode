@@ -4,4 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [lib]
-crate-type = ["cdylib"]
+# Linked into the MLT module, so Shotcut loads a single file.
+crate-type = ["staticlib"]
+
+[dependencies]
+anicode-lua = { version = "0.1.0", path = "../anicode-lua" }
+anicode-render = { version = "0.1.0", path = "../anicode-render" }
