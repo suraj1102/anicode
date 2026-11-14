@@ -2,3 +2,6 @@
 name = "anicode-core"
 version.workspace = true
 edition.workspace = true
+
+[dependencies]
+kurbo = "0.13.1"
