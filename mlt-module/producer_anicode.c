@@ -1,10 +1,12 @@
 #include <framework/mlt.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 // M0 spike: draws a test pattern (color bars with a white bar that moves
 // one column per frame) so we can see that Shotcut loads the module and
-// requests new frames.
+// requests new frames. The bars shift each time the scene file is saved,
+// to test whether Shotcut picks up file changes.
 
 static const uint8_t BAR_COLORS[][3] = {
     {255, 255, 255}, {255, 255, 0}, {0, 255, 255}, {0, 255, 0},
@@ -12,13 +14,23 @@ static const uint8_t BAR_COLORS[][3] = {
 };
 static const int BAR_COUNT = sizeof(BAR_COLORS) / sizeof(BAR_COLORS[0]);
 
-static void draw_test_pattern(uint8_t *rgba, int width, int height, mlt_position position)
+// Changes whenever the file's modification time changes.
+static int bar_shift_for_file(const char *path)
+{
+    struct stat info;
+    if (path == NULL || stat(path, &info) != 0)
+        return 0;
+    return info.st_mtime % BAR_COUNT;
+}
+
+static void draw_test_pattern(uint8_t *rgba, int width, int height, mlt_position position,
+                              int bar_shift)
 {
     int moving_column = position % width;
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             uint8_t *pixel = rgba + (y * width + x) * 4;
-            const uint8_t *color = BAR_COLORS[x * BAR_COUNT / width];
+            const uint8_t *color = BAR_COLORS[(x * BAR_COUNT / width + bar_shift) % BAR_COUNT];
             int is_moving_bar = abs(x - moving_column) < 8;
             pixel[0] = is_moving_bar ? 255 : color[0] / 2;
             pixel[1] = is_moving_bar ? 255 : color[1] / 2;
@@ -40,7 +52,9 @@ static int get_image(mlt_frame frame, uint8_t **buffer, mlt_image_format *format
 
     int size = *width * *height * 4;
     uint8_t *rgba = mlt_pool_alloc(size);
-    draw_test_pattern(rgba, *width, *height, mlt_frame_original_position(frame));
+    const char *scene_path = mlt_properties_get(MLT_PRODUCER_PROPERTIES(producer), "resource");
+    draw_test_pattern(rgba, *width, *height, mlt_frame_original_position(frame),
+                      bar_shift_for_file(scene_path));
 
     mlt_frame_set_image(frame, rgba, size, mlt_pool_release);
     *buffer = rgba;
