@@ -23,6 +23,7 @@
 
 # Per-user Claude Code settings
 .claude/settings.local.json
+.claude/
 
 # macOS
 .DS_Store
