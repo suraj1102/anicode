@@ -19,7 +19,8 @@ width = 640
 height = 360
 # Scenes in examples/ that have reference frames in tests/golden/.
 scenes = ["basics", "math"]
-# Points in each example to check, as fractions of the scene length.
-points = [0.0, 0.25, 0.5, 0.75, 1.0]
+# Points in each example to check, as fractions of the scene length. Most
+# fall inside animations, so timing changes show up.
+points = [0.0, 0.1, 0.35, 0.6, 1.0]
 # Largest allowed difference per color channel (0 to 255).
 tolerance = 2
