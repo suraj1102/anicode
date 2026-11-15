@@ -10,4 +10,4 @@ crate-type = ["staticlib"]
 [dependencies]
 anicode-lua = { version = "0.1.0", path = "../anicode-lua" }
 anicode-render = { version = "0.1.0", path = "../anicode-render" }
-roxmltree = "0.21.2"
+anicode-shotcut = { version = "0.1.0", path = "../anicode-shotcut" }

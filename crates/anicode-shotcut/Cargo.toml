@@ -1,0 +1,7 @@
+[package]
+name = "anicode-shotcut"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+roxmltree = "0.21.2"

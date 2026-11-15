@@ -10,8 +10,6 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-mod shotcut;
-
 use anicode_lua::{Config, Engine, Settings};
 use anicode_render::{CpuRenderer, ImageAlphaType};
 
@@ -61,11 +59,11 @@ impl AnicodeEngine {
             .as_deref()
             .is_some_and(|project| !project.is_file());
         if scene_changed || project_gone {
-            self.project = shotcut::find_project(&config.root, &self.scene);
+            self.project = anicode_shotcut::find_project(&config.root, &self.scene);
         }
         self.project_modified = self.project.as_deref().and_then(modified_time);
         let markers = match &self.project {
-            Some(project) => shotcut::clip_markers(project, &self.scene)?,
+            Some(project) => anicode_shotcut::clip_markers(project, &self.scene)?,
             None => HashMap::new(),
         };
         let settings = Settings {
@@ -320,7 +318,7 @@ mod tests {
         )
         .unwrap();
         let project = root.join("edit.mlt");
-        let xml = include_str!("../tests/fixtures/shotcut-26.9.mlt");
+        let xml = include_str!("../../anicode-shotcut/tests/fixtures/shotcut-26.9.mlt");
         std::fs::write(&project, xml).unwrap();
 
         let engine = open(root.join("shape.lua").to_str().unwrap());

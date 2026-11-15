@@ -57,6 +57,7 @@ version = "0.1.0"
 dependencies = [
  "anicode-lua",
  "anicode-render",
+ "anicode-shotcut",
  "clap",
 ]
 
@@ -73,7 +74,7 @@ version = "0.1.0"
 dependencies = [
  "anicode-lua",
  "anicode-render",
- "roxmltree",
+ "anicode-shotcut",
 ]
 
 [[package]]
@@ -96,6 +97,13 @@ dependencies = [
  "pollster",
  "vello",
  "vello_cpu 0.4.0",
+]
+
+[[package]]
+name = "anicode-shotcut"
+version = "0.1.0"
+dependencies = [
+ "roxmltree",
 ]
 
 [[package]]
