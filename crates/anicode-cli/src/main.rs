@@ -138,8 +138,9 @@ fn write_wrapper(scene: &Path) -> Result<(), String> {
     let id = xml_escape(&scene.file_stem().unwrap_or_default().to_string_lossy());
     // The resource is relative, so the project folder can move.
     let resource = xml_escape(&scene.file_name().unwrap_or_default().to_string_lossy());
+    let profile = profile_xml(&Config::find_for(scene)?);
     let xml = format!(
-        "<mlt><producer id=\"{id}\" mlt_service=\"anicode\">\n  <property name=\"resource\">{resource}</property>\n</producer></mlt>\n"
+        "<mlt>\n{profile}\n<producer id=\"{id}\" mlt_service=\"anicode\">\n  <property name=\"resource\">{resource}</property>\n</producer>\n</mlt>\n"
     );
     std::fs::write(&wrapper, xml).map_err(|error| format!("{}: {error}", wrapper.display()))?;
     println!(
@@ -147,6 +148,37 @@ fn write_wrapper(scene: &Path) -> Result<(), String> {
         wrapper.display()
     );
     Ok(())
+}
+
+/// The video format of the clip. Shotcut stores a wrapper dragged into a
+/// project as a virtual clip, and without a profile it assumes interlaced
+/// PAL and adds a deinterlace step that fails on every frame.
+fn profile_xml(config: &Config) -> String {
+    let (width, height) = (
+        u32::from(config.render.width),
+        u32::from(config.render.height),
+    );
+    let fps = config.render.fps;
+    // NTSC rates like 29.97 are exact fractions of 1001.
+    let (rate_num, rate_den) = if fps.fract() == 0.0 {
+        (fps as u32, 1)
+    } else {
+        ((fps * 1001.0).round() as u32, 1001)
+    };
+    let divisor = greatest_common_divisor(width, height);
+    format!(
+        "<profile width=\"{width}\" height=\"{height}\" progressive=\"1\" sample_aspect_num=\"1\" sample_aspect_den=\"1\" display_aspect_num=\"{}\" display_aspect_den=\"{}\" frame_rate_num=\"{rate_num}\" frame_rate_den=\"{rate_den}\" colorspace=\"709\"/>",
+        width / divisor,
+        height / divisor,
+    )
+}
+
+fn greatest_common_divisor(a: u32, b: u32) -> u32 {
+    if b == 0 {
+        a
+    } else {
+        greatest_common_divisor(b, a % b)
+    }
 }
 
 fn xml_escape(text: &str) -> String {
