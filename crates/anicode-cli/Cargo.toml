@@ -10,4 +10,5 @@ path = "src/main.rs"
 [dependencies]
 anicode-lua = { version = "0.1.0", path = "../anicode-lua" }
 anicode-render = { version = "0.1.0", path = "../anicode-render" }
+anicode-shotcut = { version = "0.1.0", path = "../anicode-shotcut" }
 clap = { version = "4.6.7", features = ["derive"] }

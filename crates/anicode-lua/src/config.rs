@@ -77,12 +77,16 @@ impl Config {
     }
 }
 
-/// Loads a scene with no markers set, so every block gets the default length.
-pub fn load_scene(path: &Path, config: &Config) -> Result<Engine, String> {
+/// Loads a scene timed by `markers` (block name to start time in seconds).
+pub fn load_scene(
+    path: &Path,
+    config: &Config,
+    markers: &HashMap<String, f64>,
+) -> Result<Engine, String> {
     let settings = Settings {
         frame_height: config.render.frame_height,
         default_block_seconds: config.timing.default_block_seconds,
         default_animation_seconds: config.timing.default_animation_seconds,
     };
-    Engine::load(path, &HashMap::new(), settings)
+    Engine::load(path, markers, settings)
 }

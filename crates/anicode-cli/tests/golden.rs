@@ -1,6 +1,7 @@
 //! Renders example scenes on the CPU and compares them to reference PNGs in
 //! tests/golden. To accept new output, run with ANICODE_UPDATE_GOLDEN=1.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -22,7 +23,12 @@ fn examples_match_golden_frames() {
     let mut failures = vec![];
 
     for scene_name in &golden.scenes {
-        let engine = load_scene(&root.join(format!("examples/{scene_name}.lua")), &config).unwrap();
+        let engine = load_scene(
+            &root.join(format!("examples/{scene_name}.lua")),
+            &config,
+            &HashMap::new(),
+        )
+        .unwrap();
         let mut renderer = CpuRenderer::new(golden.width, golden.height);
 
         for (index, point) in golden.points.iter().enumerate() {

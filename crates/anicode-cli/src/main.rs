@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -32,6 +33,9 @@ enum Command {
     },
     /// Write the .mlt file that Shotcut opens as a clip for a scene.
     New { scene: PathBuf },
+    /// Add a Shotcut marker for every block that has none, at its current
+    /// time, to a saved project. Close the project in Shotcut first.
+    Markers { project: PathBuf },
 }
 
 enum Renderer {
@@ -49,6 +53,7 @@ fn main() -> ExitCode {
             config,
         } => render(&scene, &out, frames.as_deref(), gpu, &config),
         Command::New { scene } => write_wrapper(&scene),
+        Command::Markers { project } => write_markers(&project),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -69,7 +74,7 @@ fn render(
     let config = Config::load(config)?;
     let (width, height) = (config.render.width, config.render.height);
     let fps = config.render.fps;
-    let engine = load_scene(scene, &config)?;
+    let engine = load_scene(scene, &config, &HashMap::new())?;
 
     let frame_count = (engine.duration() * fps).round() as u32 + 1;
     let (first, end) = match frames {
@@ -185,4 +190,51 @@ fn xml_escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('"', "&quot;")
+}
+
+fn write_markers(project: &Path) -> Result<(), String> {
+    let clips = anicode_shotcut::scene_clips(project)?;
+    if clips.is_empty() {
+        return Err(format!(
+            "{}: no Anicode clips on the timeline",
+            project.display()
+        ));
+    }
+
+    let mut added = vec![];
+    for clip in &clips {
+        let config = Config::find_for(&clip.scene)?;
+        let existing = anicode_shotcut::clip_markers(project, &clip.scene)?;
+        let engine = load_scene(&clip.scene, &config, &existing)?;
+        // Prefixed with the scene, so numbered play blocks of different
+        // scenes get different markers.
+        let scene_name = clip.scene.file_stem().unwrap_or_default().to_string_lossy();
+        for (block, start) in engine.block_starts() {
+            if !existing.contains_key(&block) {
+                let timeline_time = start - clip.in_point + clip.start;
+                added.push((format!("{scene_name}:{block}"), timeline_time));
+            }
+        }
+    }
+    if added.is_empty() {
+        println!("every block already has a marker");
+        return Ok(());
+    }
+
+    let read_error = |error: std::io::Error| format!("{}: {error}", project.display());
+    let xml = std::fs::read_to_string(project).map_err(read_error)?;
+    let updated = anicode_shotcut::add_markers(&xml, &added)?;
+    let backup = project.with_extension("mlt.bak");
+    std::fs::copy(project, &backup).map_err(|error| format!("{}: {error}", backup.display()))?;
+    std::fs::write(project, updated).map_err(read_error)?;
+
+    for (name, time) in &added {
+        println!("added marker {name} at {time:.2} s");
+    }
+    println!(
+        "saved {} (previous version in {}); reopen it in Shotcut",
+        project.display(),
+        backup.display()
+    );
+    Ok(())
 }

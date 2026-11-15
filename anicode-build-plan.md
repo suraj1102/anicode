@@ -221,7 +221,7 @@ If a scene names a marker that doesn't exist yet, the engine falls back to a def
 
 1. Record the voice-over and drop it on Shotcut's audio track.
 2. Write `scenes/fuzz.lua` in your editor, run `anicode new fuzz`, and drag the wrapper onto the video track.
-3. Add Shotcut markers `fuzz:intro`, `fuzz:transfer` and so on at the words they belong to, then save the project.
+3. Add Shotcut markers `fuzz:intro`, `fuzz:transfer` and so on at the words they belong to, then save the project. Or let `anicode markers project.mlt` (with the project closed in Shotcut) add a marker named `scene:block` for every block that has none, at its current time, and drag those.
 4. Edit code or params. Each save refreshes Shotcut's preview at the current frame.
 5. Scrub and adjust markers until it lands. Cut, mix and add effects in Shotcut as usual.
 6. Export from Shotcut, or export ProRes 4444 with alpha for finishing in DaVinci.
