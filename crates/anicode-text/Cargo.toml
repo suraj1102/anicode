@@ -2,3 +2,12 @@
 name = "anicode-text"
 version.workspace = true
 edition.workspace = true
+
+[dependencies]
+anicode-core = { version = "0.1.0", path = "../anicode-core" }
+mitex = "0.2.4"
+mitex-spec-gen = "0.2.4"
+ttf-parser = "0.25"
+typst = "0.15.1"
+typst-assets = { version = "0.15.1", features = ["fonts"] }
+typst-layout = "0.15.1"
