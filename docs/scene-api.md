@@ -47,7 +47,7 @@ at "end"   { fade_out(box) }
 | grow or shrink | `node:scale(factor)` |
 | turn | `node:rotate(radians)` |
 | change any number | `animate(node.w, 5)` or `animate(value, 1)` |
-| make it shorter than the block | add `:over(seconds)` |
+| set how long it takes | add `:over(seconds)` (default 1 second) |
 | change the speed curve | add `:ease("linear")`, `"in"`, `"out"` or `"inout"` |
 | link one value to another | `node.x = derive(function() return ... end)` |
 | start something later | put it in a later `at` block |
@@ -214,8 +214,12 @@ created inside the braces belong to that block.
 - A block starts at the Shotcut marker with the same name, if one is set (see
   the README). Otherwise it starts `default_block_seconds` (2 by default)
   after the previous block. The first block starts at 0.
-- A block ends where the next one starts. The last block runs for
-  `default_block_seconds`. The scene ends when the last block ends.
+- A block only sets when its animations start. Each animation runs for 1
+  second (`default_animation_seconds`) unless you give it `:over(seconds)`.
+  It does not stretch to the next block, and it may run past the next
+  block's start.
+- The scene ends `default_block_seconds` after the last block starts, or
+  when the last animation finishes, whichever is later.
 - Before its block starts, an animated property keeps its earlier value.
   After the animation ends, it keeps the final value.
 - Blocks cannot be nested.
@@ -246,7 +250,7 @@ Each returns an animation that takes two chained settings:
 
 | Method | Meaning | Default |
 | --- | --- | --- |
-| `:over(seconds)` | how long the animation runs, from the block start | the whole block |
+| `:over(seconds)` | how long the animation runs, from the block start | 1 second (`timing.default_animation_seconds`) |
 | `:ease(name)` | `"linear"`, `"in"`, `"out"` or `"inout"` (cubic curves) | `"inout"` |
 
 ```lua
@@ -275,7 +279,7 @@ The first four return the node, so they chain:
 gain:scale(1.4):shift(LEFT * 0.5)
 ```
 
-Inside a block they always run for the whole block with `"inout"` easing,
+Inside a block they always run for the default 1 second with `"inout"` easing,
 because they return the node, not an animation. When you need `:over` or
 `:ease`, use the global `move_to` or `animate` instead.
 

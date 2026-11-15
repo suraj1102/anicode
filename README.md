@@ -92,10 +92,11 @@ ffmpeg -y -framerate 29.97 -i frames/frame_%05d.png -pix_fmt yuv420p hello.mp4 &
 What the scene does:
 
 - `Rect { ... }` creates a rounded box. It exists for the whole scene.
-- Each `at "name" { ... }` is a block of time. With no Shotcut markers,
-  each block lasts 2 seconds, so this scene is 6 seconds long.
-- `fade_in`, `move_to` and `fade_out` are animations. Each one runs inside
-  its block.
+- Each `at "name" { ... }` marks a point in time. With no Shotcut markers,
+  the blocks start 2 seconds apart (0 s, 2 s, 4 s), so this scene is 6
+  seconds long.
+- `fade_in`, `move_to` and `fade_out` are animations. Each one starts at its
+  block and runs for 1 second, or for the time given with `:over`.
 
 If the script has a mistake, `render` prints `error: file:line: message` and
 writes no frames.
@@ -127,7 +128,7 @@ cargo build --release -p anicode-cli
 ./target/release/anicode render examples/orbit.lua --out frames
 ```
 
-`render` ignores Shotcut markers. Every block gets the default 2 seconds.
+`render` ignores Shotcut markers, so the blocks always start 2 seconds apart.
 
 ## What works today
 
@@ -275,7 +276,8 @@ All settings are in `config/anicode.toml`.
 | `render.fps` | frame rate for `render` and `new` |
 | `render.background` | background color as RGBA from 0 to 1; transparent by default so clips layer over video in Shotcut |
 | `render.frame_height` | how many scene units fit from the bottom to the top of the frame |
-| `timing.default_block_seconds` | length of an `at` block that has no marker |
+| `timing.default_block_seconds` | gap before an `at` block that has no marker |
+| `timing.default_animation_seconds` | length of an animation without `:over` |
 | `golden.*` | settings for the golden-frame test |
 
 In Shotcut, the frame size and rate come from the Shotcut project instead.
