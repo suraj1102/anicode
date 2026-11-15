@@ -6,15 +6,12 @@ plays a scene as a clip and Shotcut timeline markers set its timing.
 
 ## Docs
 
-The docs show every example next to its rendered video. Build them and open
-them in a browser:
+The docs show every example next to its rendered video. They are online at
+https://suraj1102.github.io/anicode/ and rebuild on every push to `main`. To
+open them locally:
 
 ```bash
-brew install mdbook
-```
-
-```bash
-scripts/docs-media.sh
+brew install mdbook git-lfs
 ```
 
 ```bash
@@ -22,9 +19,13 @@ mdbook serve docs --open
 ```
 
 The pages are Markdown files in [docs/src](docs/src), and the example scenes
-are in [docs/src/examples](docs/src/examples). `docs-media.sh` renders those
-scenes and the ones in [examples](examples) into videos; run it again after
-changing a scene. The design and roadmap are in
+are in [docs/src/examples](docs/src/examples). The videos in `docs/src/media`
+are stored in Git LFS and are not rendered by CI. After changing a scene,
+render them again and commit the result:
+
+```bash
+scripts/docs-media.sh
+``` The design and roadmap are in
 [anicode-build-plan.md](anicode-build-plan.md).
 
 ## Quick start
