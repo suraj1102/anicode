@@ -19,5 +19,5 @@ moon.x = derive(function() return 0.7 * math.cos(5 * angle:get()) end)
 moon.y = derive(function() return 0.7 * math.sin(5 * angle:get()) end)
 
 at "appear" { fade_in(sun), fade_in(planet) }
-at "orbit" { animate(angle, 2 * math.pi):ease("linear") }
-at "fast" { animate(angle, 6 * math.pi):ease("in") }
+at "orbit" { animate(angle, 2 * math.pi):over(2):ease("linear") }
+at "fast" { animate(angle, 6 * math.pi):over(2):ease("in") }
