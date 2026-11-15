@@ -10,6 +10,9 @@ frame_height = 8.0
 [timing]
 # Length of an `at` block whose marker is not set.
 default_block_seconds = 2.0
+# Length of an animation without :over(seconds). A marker only sets when
+# animations start; they do not stretch to the next marker.
+default_animation_seconds = 1.0
 
 [golden]
 width = 640

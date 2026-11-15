@@ -71,6 +71,7 @@ impl AnicodeEngine {
         let settings = Settings {
             frame_height: config.render.frame_height,
             default_block_seconds: config.timing.default_block_seconds,
+            default_animation_seconds: config.timing.default_animation_seconds,
         };
         let engine = Engine::load(&self.scene, &markers, settings)?;
         Ok((engine, config))

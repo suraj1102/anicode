@@ -31,6 +31,7 @@ pub struct RenderConfig {
 #[derive(Deserialize)]
 pub struct TimingConfig {
     pub default_block_seconds: f64,
+    pub default_animation_seconds: f64,
 }
 
 #[derive(Deserialize)]
@@ -81,6 +82,7 @@ pub fn load_scene(path: &Path, config: &Config) -> Result<Engine, String> {
     let settings = Settings {
         frame_height: config.render.frame_height,
         default_block_seconds: config.timing.default_block_seconds,
+        default_animation_seconds: config.timing.default_animation_seconds,
     };
     Engine::load(path, &HashMap::new(), settings)
 }

@@ -62,7 +62,7 @@ A scene is a single `.lua` file that builds objects once, then attaches animatio
 
 | Function | What it does |
 | --- | --- |
-| `at "name" { ... }` | runs these animations starting at marker `name` and ending at the next marker |
+| `at "name" { ... }` | starts these animations at marker `name`; each lasts `default_animation_seconds` (1 s) unless it has `:over(seconds)` |
 | `param("name", default)` | a value you can override from the project without editing code |
 | `animate(value, target)` | tweens a property; chain `:over(seconds)`, `:ease("inout")` |
 | `fade_in`, `fade_out`, `write`, `morph`, `move_to` | the common Manim-style animations |
@@ -128,10 +128,10 @@ $$
 S(t) = f\big(\text{scene},\ \{m_i\},\ \{p_j\},\ t\big)
 $$
 
-Inside a marker block that runs from $m_i$ to $m_{i+1}$, each animation sees local progress $u$, which an easing curve then reshapes:
+An animation that starts at marker $m_i$ and lasts $d$ seconds (from `:over`, or the configured default) sees local progress $u$, which an easing curve then reshapes. Markers only set start times, so markers placed together still animate:
 
 $$
-u = \operatorname{clamp}\!\left(\frac{t - m_i}{m_{i+1} - m_i},\ 0,\ 1\right)
+u = \operatorname{clamp}\!\left(\frac{t - m_i}{d},\ 0,\ 1\right)
 $$
 
 Per frame, the engine (1) sets animated values for $t$, (2) resolves `derive` properties in dependency order, failing loudly on cycles, and (3) renders.

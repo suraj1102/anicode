@@ -30,7 +30,7 @@ impl Target {
 #[derive(Clone, Copy, Debug)]
 pub struct Animation {
     pub block: usize,
-    /// `None` runs the animation for the whole block.
+    /// `None` uses the default animation length.
     pub duration: Option<f64>,
     pub target: Target,
     pub easing: Easing,
@@ -126,7 +126,7 @@ impl Properties {
 
     /// Converts block-relative animations into absolute times. Each animation
     /// starts from the value the property has when it begins.
-    pub fn resolve(&mut self, blocks: &[BlockTime]) {
+    pub fn resolve(&mut self, blocks: &[BlockTime], default_duration: f64) {
         for property in &mut self.list {
             let mut animations = property.animations.clone();
             animations.sort_by(|a, b| blocks[a.block].start.total_cmp(&blocks[b.block].start));
@@ -138,13 +138,22 @@ impl Properties {
                 let from = value_at(property.base, &property.timed, start);
                 property.timed.push(TimedAnimation {
                     start,
-                    duration: animation.duration.unwrap_or(block.end - block.start),
+                    duration: animation.duration.unwrap_or(default_duration),
                     from,
                     to: animation.target.apply(from),
                     easing: animation.easing,
                 });
             }
         }
+    }
+
+    /// When the last animation finishes, in seconds.
+    pub fn last_animation_end(&self) -> f64 {
+        self.list
+            .iter()
+            .flat_map(|property| &property.timed)
+            .map(|animation| animation.start + animation.duration)
+            .fold(0.0, f64::max)
     }
 
     /// The animated value at `time`. Ignores derive; the caller handles that.
@@ -235,7 +244,7 @@ mod tests {
         let mut properties = Properties::default();
         let x = properties.add(0.0);
         properties.animate(x, animation(0, Target::To(10.0)));
-        properties.resolve(&BLOCKS);
+        properties.resolve(&BLOCKS, 2.0);
         assert_eq!(properties.value_at(x, 0.0), 0.0);
         assert_eq!(properties.value_at(x, 1.0), 5.0);
         assert_eq!(properties.value_at(x, 3.0), 10.0);
@@ -247,7 +256,7 @@ mod tests {
         let x = properties.add(1.0);
         properties.animate(x, animation(1, Target::Times(3.0)));
         properties.animate(x, animation(0, Target::By(1.0)));
-        properties.resolve(&BLOCKS);
+        properties.resolve(&BLOCKS, 2.0);
         assert_eq!(properties.value_at(x, 2.0), 2.0);
         assert_eq!(properties.value_at(x, 4.0), 6.0);
     }
@@ -258,8 +267,25 @@ mod tests {
         let x = properties.add(0.0);
         let index = properties.animate(x, animation(0, Target::To(1.0)));
         properties.animation_mut(x, index).duration = Some(0.5);
-        properties.resolve(&BLOCKS);
+        properties.resolve(&BLOCKS, 2.0);
         assert_eq!(properties.value_at(x, 0.5), 1.0);
+    }
+
+    #[test]
+    fn blocks_at_the_same_time_still_animate() {
+        let mut properties = Properties::default();
+        let x = properties.add(0.0);
+        let y = properties.add(0.0);
+        properties.animate(x, animation(0, Target::To(1.0)));
+        properties.animate(y, animation(1, Target::To(1.0)));
+        let stacked = [BlockTime {
+            start: 3.0,
+            end: 3.0,
+        }; 2];
+        properties.resolve(&stacked, 1.0);
+        assert_eq!(properties.value_at(x, 3.5), 0.5);
+        assert_eq!(properties.value_at(y, 3.5), 0.5);
+        assert_eq!(properties.last_animation_end(), 4.0);
     }
 
     #[test]

@@ -21,6 +21,8 @@ pub struct Settings {
     pub frame_height: f64,
     /// Length of an `at` block whose marker is not set.
     pub default_block_seconds: f64,
+    /// Length of an animation without `:over(seconds)`.
+    pub default_animation_seconds: f64,
 }
 
 pub struct Engine {
@@ -81,7 +83,11 @@ impl Engine {
         state
             .scene
             .borrow_mut()
-            .resolve(markers, settings.default_block_seconds)
+            .resolve(
+                markers,
+                settings.default_block_seconds,
+                settings.default_animation_seconds,
+            )
             .map_err(|error| format!("{name}: {error}"))?;
 
         Ok(Engine {
@@ -157,6 +163,7 @@ mod tests {
         let settings = Settings {
             frame_height: 8.0,
             default_block_seconds: 2.0,
+            default_animation_seconds: 1.0,
         };
         Engine::from_source(
             source,
@@ -172,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn fade_in_runs_over_its_block() {
+    fn fade_in_runs_for_the_default_length() {
         let engine = load(
             r#"
             local box = Rect { fill = RED }
@@ -182,8 +189,8 @@ mod tests {
         .unwrap();
         assert_eq!(engine.duration(), 2.0);
         assert!(engine.display_list(0.0, 160, 90).unwrap().is_empty());
-        assert_eq!(first_fill_alpha(&engine, 1.0), 0.5);
-        assert_eq!(first_fill_alpha(&engine, 2.0), 1.0);
+        assert_eq!(first_fill_alpha(&engine, 0.5), 0.5);
+        assert_eq!(first_fill_alpha(&engine, 1.0), 1.0);
     }
 
     #[test]

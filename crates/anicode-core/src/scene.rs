@@ -155,6 +155,7 @@ impl Scene {
         &mut self,
         markers: &HashMap<String, f64>,
         default_block_seconds: f64,
+        default_animation_seconds: f64,
     ) -> Result<(), String> {
         if let Some(block) = self.properties.animated_derive_block() {
             return Err(format!(
@@ -163,13 +164,16 @@ impl Scene {
             ));
         }
         self.block_times = timeline::block_times(&self.blocks, markers, default_block_seconds);
-        self.properties.resolve(&self.block_times);
+        self.properties
+            .resolve(&self.block_times, default_animation_seconds);
         Ok(())
     }
 
-    /// Scene length in seconds: the end of the last block.
+    /// Scene length in seconds: the end of the last block, or of the last
+    /// animation if that runs longer.
     pub fn duration(&self) -> f64 {
-        self.block_times.last().map_or(0.0, |block| block.end)
+        let last_block_end = self.block_times.last().map_or(0.0, |block| block.end);
+        last_block_end.max(self.properties.last_animation_end())
     }
 
     /// Builds the shapes to draw for one frame. `value` returns a property's
