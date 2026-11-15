@@ -147,6 +147,16 @@ impl Properties {
         }
     }
 
+    /// The length of the longest animation in each block.
+    pub fn longest_animations(&self, block_count: usize, default_duration: f64) -> Vec<f64> {
+        let mut longest = vec![0.0; block_count];
+        for animation in self.list.iter().flat_map(|property| &property.animations) {
+            let duration = animation.duration.unwrap_or(default_duration);
+            longest[animation.block] = f64::max(longest[animation.block], duration);
+        }
+        longest
+    }
+
     /// When the last animation finishes, in seconds.
     pub fn last_animation_end(&self) -> f64 {
         self.list

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use kurbo::{Affine, BezPath, Circle, Point, RoundedRect, Shape as _};
 
 use crate::property::{Properties, PropertyId};
-use crate::timeline::{self, BlockTime};
+use crate::timeline::{self, Block, BlockTime};
 
 pub type NodeId = usize;
 /// Straight (not premultiplied) RGBA, each channel 0 to 1.
@@ -71,8 +71,8 @@ pub struct DrawItem {
 pub struct Scene {
     pub properties: Properties,
     pub nodes: Vec<Node>,
-    /// Marker names of the `at` blocks, in the order the scene declares them.
-    pub blocks: Vec<String>,
+    /// The `at` and `play` blocks, in the order the scene declares them.
+    pub blocks: Vec<Block>,
     block_times: Vec<BlockTime>,
 }
 
@@ -160,20 +160,25 @@ impl Scene {
         if let Some(block) = self.properties.animated_derive_block() {
             return Err(format!(
                 "at \"{}\" animates a value that is set with derive; derive replaces animations, so remove one of them",
-                self.blocks[block]
+                self.blocks[block].name
             ));
         }
-        self.block_times = timeline::block_times(&self.blocks, markers, default_block_seconds);
+        let longest = self
+            .properties
+            .longest_animations(self.blocks.len(), default_animation_seconds);
+        self.block_times =
+            timeline::block_times(&self.blocks, &longest, markers, default_block_seconds);
         self.properties
             .resolve(&self.block_times, default_animation_seconds);
         Ok(())
     }
 
-    /// Scene length in seconds: the end of the last block, or of the last
-    /// animation if that runs longer.
+    /// Scene length in seconds: when the last block or animation ends.
     pub fn duration(&self) -> f64 {
-        let last_block_end = self.block_times.last().map_or(0.0, |block| block.end);
-        last_block_end.max(self.properties.last_animation_end())
+        self.block_times
+            .iter()
+            .map(|block| block.end)
+            .fold(self.properties.last_animation_end(), f64::max)
     }
 
     /// Builds the shapes to draw for one frame. `value` returns a property's

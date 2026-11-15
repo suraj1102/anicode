@@ -7,4 +7,4 @@ pub use easing::Easing;
 pub use kurbo;
 pub use property::{Animation, CycleError, DeriveId, Frame, Properties, PropertyId, Target};
 pub use scene::{Color, DrawItem, Node, NodeId, Scene, Shape};
-pub use timeline::{BlockTime, block_times};
+pub use timeline::{Block, BlockTime, block_times};

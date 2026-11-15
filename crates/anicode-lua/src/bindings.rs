@@ -1,11 +1,11 @@
-//! The Lua scene API: shapes, `at`, `animate`, `derive` and friends.
+//! The Lua scene API: shapes, `at`, `play`, `animate`, `derive` and friends.
 //! Lua only holds handles (ids); Rust owns every object in the scene.
 
 use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;
 
 use anicode_core::kurbo::{Affine, Point};
-use anicode_core::{Animation, Color, Easing, Frame, NodeId, PropertyId, Scene, Target};
+use anicode_core::{Animation, Block, Color, Easing, Frame, NodeId, PropertyId, Scene, Target};
 use mlua::{
     AnyUserData, Error, Function, Lua, MetaMethod, Result, Table, UserData, UserDataMethods, Value,
 };
@@ -18,7 +18,22 @@ const DERIVES: &str = "anicode_derives";
 pub(crate) struct State {
     pub scene: RefCell<Scene>,
     pub frame: RefCell<Option<Frame>>,
+    /// The `at` block whose { } is being read.
     pub current_block: Cell<Option<usize>>,
+    /// Lua reads `play { fade_in(a) }` inside out: `fade_in` runs before
+    /// `play`. So the first animation function outside an `at` block opens
+    /// the next `play` block, which `play` then closes.
+    pub pending_play: Cell<Option<PendingPlay>>,
+    play_count: Cell<usize>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PendingPlay {
+    block: usize,
+    /// Where the first animation was written, for the error if no `play`
+    /// follows.
+    pub line: Option<usize>,
+    pub action: &'static str,
 }
 
 impl State {
@@ -28,10 +43,35 @@ impl State {
             .map_err(|_| Error::runtime("the scene cannot be changed while a frame renders"))
     }
 
-    fn require_block(&self, action: &str) -> Result<usize> {
-        self.current_block
-            .get()
-            .ok_or_else(|| Error::runtime(format!("{action} must be called inside an at block")))
+    /// The block an animation function adds to: the open `at` block, or the
+    /// coming `play` block.
+    fn animation_block(&self, lua: &Lua, action: &'static str) -> Result<usize> {
+        if let Some(block) = self.current_block.get() {
+            return Ok(block);
+        }
+        if let Some(pending) = self.pending_play.get() {
+            return Ok(pending.block);
+        }
+        let block = self.add_play_block()?;
+        let line = lua.inspect_stack(1, |debug| debug.current_line()).flatten();
+        self.pending_play.set(Some(PendingPlay {
+            block,
+            line,
+            action,
+        }));
+        Ok(block)
+    }
+
+    /// Unnamed `play` blocks are numbered 1, 2, 3, so markers can name them.
+    fn add_play_block(&self) -> Result<usize> {
+        let number = self.play_count.get() + 1;
+        self.play_count.set(number);
+        let mut scene = self.scene_mut()?;
+        scene.blocks.push(Block {
+            name: number.to_string(),
+            seconds: None,
+        });
+        Ok(scene.blocks.len() - 1)
     }
 }
 
@@ -70,45 +110,79 @@ pub(crate) fn register(lua: &Lua, state: &Shared) -> Result<()> {
                     "at blocks cannot be nested (is a { } missing after an earlier at?)",
                 ));
             }
-            let mut scene = shared.scene_mut()?;
-            scene.blocks.push(name);
-            shared.current_block.set(Some(scene.blocks.len() - 1));
+            if let Some(pending) = shared.pending_play.get() {
+                return Err(outside_block_error(pending));
+            }
+            let block = {
+                let mut scene = shared.scene_mut()?;
+                scene.blocks.push(Block {
+                    name,
+                    seconds: None,
+                });
+                scene.blocks.len() - 1
+            };
+            shared.current_block.set(Some(block));
             let state = shared.clone();
-            lua.create_function(move |_, _: Value| {
+            lua.create_function(move |lua, options: Table| {
                 state.current_block.set(None);
-                Ok(())
+                apply_block_options(lua, &state, block, "at", &options)
             })
         })?,
     )?;
 
     let shared = state.clone();
     globals.set(
+        "play",
+        lua.create_function(move |lua, options: Table| {
+            if shared.current_block.get().is_some() {
+                return Err(Error::runtime("play cannot be inside an at block"));
+            }
+            let block = match shared.pending_play.take() {
+                Some(pending) => pending.block,
+                None => shared.add_play_block()?,
+            };
+            for value in options.sequence_values::<Value>() {
+                if let Value::UserData(data) = value?
+                    && data.is::<NodeHandle>()
+                {
+                    return Err(Error::runtime(
+                        "a method like box:shift(UP) inside play changes the value right away; \
+                         write shift(box, UP) to animate it",
+                    ));
+                }
+            }
+            apply_block_options(lua, &shared, block, "play", &options)
+        })?,
+    )?;
+
+    let shared = state.clone();
+    globals.set(
         "animate",
-        lua.create_function(move |_, (property, to): (AnyUserData, f64)| {
+        lua.create_function(move |lua, (property, to): (AnyUserData, f64)| {
             let id = property.borrow::<PropertyHandle>()?.id;
-            shared.require_block("animate")?;
-            animation_handle(&shared, &[(id, Target::To(to))])
+            let block = shared.animation_block(lua, "animate")?;
+            animation_handle(&shared, block, &[(id, Target::To(to))])
         })?,
     )?;
 
     let shared = state.clone();
     globals.set(
         "fade_in",
-        lua.create_function(move |_, node: AnyUserData| {
+        lua.create_function(move |lua, node: AnyUserData| {
             let opacity = node.borrow::<NodeHandle>()?.property("opacity");
-            shared.require_block("fade_in")?;
+            let block = shared.animation_block(lua, "fade_in")?;
             shared.scene_mut()?.properties.set_base(opacity, 0.0);
-            animation_handle(&shared, &[(opacity, Target::To(1.0))])
+            animation_handle(&shared, block, &[(opacity, Target::To(1.0))])
         })?,
     )?;
 
     let shared = state.clone();
     globals.set(
         "fade_out",
-        lua.create_function(move |_, node: AnyUserData| {
+        lua.create_function(move |lua, node: AnyUserData| {
             let opacity = node.borrow::<NodeHandle>()?.property("opacity");
-            shared.require_block("fade_out")?;
-            animation_handle(&shared, &[(opacity, Target::To(0.0))])
+            let block = shared.animation_block(lua, "fade_out")?;
+            animation_handle(&shared, block, &[(opacity, Target::To(0.0))])
         })?,
     )?;
 
@@ -118,14 +192,54 @@ pub(crate) fn register(lua: &Lua, state: &Shared) -> Result<()> {
         lua.create_function(move |lua, (node, to): (AnyUserData, Table)| {
             let node = node.borrow::<NodeHandle>()?.clone();
             let (x, y) = vec_xy(lua, &to)?;
-            shared.require_block("move_to")?;
+            let block = shared.animation_block(lua, "move_to")?;
             animation_handle(
                 &shared,
+                block,
                 &[
                     (node.property("x"), Target::To(x)),
                     (node.property("y"), Target::To(y)),
                 ],
             )
+        })?,
+    )?;
+
+    // Function forms of the node methods, for use inside play { }.
+    let shared = state.clone();
+    globals.set(
+        "shift",
+        lua.create_function(move |lua, (node, by): (AnyUserData, Table)| {
+            let node = node.borrow::<NodeHandle>()?.clone();
+            let (x, y) = vec_xy(lua, &by)?;
+            let block = shared.animation_block(lua, "shift")?;
+            animation_handle(
+                &shared,
+                block,
+                &[
+                    (node.property("x"), Target::By(x)),
+                    (node.property("y"), Target::By(y)),
+                ],
+            )
+        })?,
+    )?;
+
+    let shared = state.clone();
+    globals.set(
+        "scale",
+        lua.create_function(move |lua, (node, factor): (AnyUserData, f64)| {
+            let scale = node.borrow::<NodeHandle>()?.property("scale");
+            let block = shared.animation_block(lua, "scale")?;
+            animation_handle(&shared, block, &[(scale, Target::Times(factor))])
+        })?,
+    )?;
+
+    let shared = state.clone();
+    globals.set(
+        "rotate",
+        lua.create_function(move |lua, (node, angle): (AnyUserData, f64)| {
+            let rotation = node.borrow::<NodeHandle>()?.property("rotation");
+            let block = shared.animation_block(lua, "rotate")?;
+            animation_handle(&shared, block, &[(rotation, Target::By(angle))])
         })?,
     )?;
 
@@ -325,8 +439,11 @@ fn create_node(
 
 /// Changes properties: as animations inside an `at` block, or immediately
 /// outside one.
-fn change(state: &State, changes: &[(PropertyId, Target)]) -> Result<Vec<(PropertyId, usize)>> {
-    let block = state.current_block.get();
+fn change(
+    state: &State,
+    block: Option<usize>,
+    changes: &[(PropertyId, Target)],
+) -> Result<Vec<(PropertyId, usize)>> {
     let mut scene = state.scene_mut()?;
     let mut added = vec![];
     for &(id, target) in changes {
@@ -349,10 +466,49 @@ fn change(state: &State, changes: &[(PropertyId, Target)]) -> Result<Vec<(Proper
     Ok(added)
 }
 
-fn animation_handle(state: &Shared, changes: &[(PropertyId, Target)]) -> Result<AnimationHandle> {
+fn animation_handle(
+    state: &Shared,
+    block: usize,
+    changes: &[(PropertyId, Target)],
+) -> Result<AnimationHandle> {
     Ok(AnimationHandle {
         state: state.clone(),
-        parts: change(state, changes)?,
+        parts: change(state, Some(block), changes)?,
+    })
+}
+
+/// Reads `seconds = n` and rejects other named options.
+fn apply_block_options(
+    lua: &Lua,
+    state: &State,
+    block: usize,
+    keyword: &str,
+    options: &Table,
+) -> Result<()> {
+    for pair in options.pairs::<Value, Value>() {
+        let (key, value) = pair?;
+        let Some(name) = key.as_string().and_then(|key| key.to_str().ok()) else {
+            continue;
+        };
+        if &*name != "seconds" {
+            return Err(Error::runtime(format!(
+                "{keyword} has no option {}",
+                &*name
+            )));
+        }
+        let seconds = number(lua, &value)?;
+        state.scene_mut()?.blocks[block].seconds = Some(seconds);
+    }
+    Ok(())
+}
+
+pub(crate) fn outside_block_error(pending: PendingPlay) -> Error {
+    Error::runtime(match pending.line {
+        Some(line) => format!(
+            "{} on line {line} is not inside an at or play block",
+            pending.action
+        ),
+        None => format!("{} is not inside an at or play block", pending.action),
     })
 }
 
@@ -427,6 +583,7 @@ impl UserData for NodeHandle {
             let (x, y) = vec_xy(lua, &to)?;
             change(
                 &node.state,
+                node.state.current_block.get(),
                 &[
                     (node.property("x"), Target::To(x)),
                     (node.property("y"), Target::To(y)),
@@ -440,6 +597,7 @@ impl UserData for NodeHandle {
             let (x, y) = vec_xy(lua, &by)?;
             change(
                 &node.state,
+                node.state.current_block.get(),
                 &[
                     (node.property("x"), Target::By(x)),
                     (node.property("y"), Target::By(y)),
@@ -452,6 +610,7 @@ impl UserData for NodeHandle {
             let node = this.borrow::<NodeHandle>()?.clone();
             change(
                 &node.state,
+                node.state.current_block.get(),
                 &[(node.property("scale"), Target::Times(factor))],
             )?;
             Ok(this)
@@ -461,6 +620,7 @@ impl UserData for NodeHandle {
             let node = this.borrow::<NodeHandle>()?.clone();
             change(
                 &node.state,
+                node.state.current_block.get(),
                 &[(node.property("rotation"), Target::By(angle))],
             )?;
             Ok(this)

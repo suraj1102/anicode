@@ -80,6 +80,15 @@ impl Engine {
         if state.current_block.get().is_some() {
             return Err(format!("{name}: the last at block has no {{ }} after it"));
         }
+        if let Some(pending) = state.pending_play.get() {
+            let location = pending
+                .line
+                .map_or(name.to_string(), |line| format!("{name}:{line}"));
+            return Err(format!(
+                "{location}: {} is not inside an at or play block",
+                pending.action
+            ));
+        }
         state
             .scene
             .borrow_mut()
@@ -228,12 +237,74 @@ mod tests {
     }
 
     #[test]
-    fn animations_need_an_at_block() {
+    fn animations_need_an_at_or_play_block() {
         let error = load("local c = Circle {}\nfade_in(c)").err().unwrap();
         assert_eq!(
             error,
-            "test.lua:2: fade_in must be called inside an at block"
+            "test.lua:2: fade_in is not inside an at or play block"
         );
+    }
+
+    fn opacity_at(engine: &Engine, time: f64) -> Vec<f32> {
+        engine
+            .display_list(time, 160, 90)
+            .unwrap()
+            .iter()
+            .map(|item| item.fill.unwrap()[3])
+            .collect()
+    }
+
+    #[test]
+    fn play_blocks_follow_each_other() {
+        let engine = load(
+            r#"
+            local a = Rect { fill = RED }
+            local b = Rect { fill = BLUE }
+            play { fade_in(a):ease("linear") }
+            play { fade_in(b):ease("linear"), seconds = 3 }
+            play { fade_out(a):ease("linear") }
+            "#,
+        )
+        .unwrap();
+        // Blocks: 0-2 s, 2-5 s (seconds = 3), 5-7 s. Animations last 1 s.
+        assert_eq!(engine.duration(), 7.0);
+        assert_eq!(opacity_at(&engine, 0.5), [0.5]);
+        assert_eq!(opacity_at(&engine, 2.5), [1.0, 0.5]);
+        assert_eq!(opacity_at(&engine, 5.5), [0.5, 1.0]);
+    }
+
+    #[test]
+    fn play_and_at_mix_and_long_animations_extend_blocks() {
+        let engine = load(
+            r#"
+            local a = Rect { fill = RED }
+            play { fade_in(a):over(3) }
+            at "next" { a:shift(RIGHT), seconds = 1 }
+            play { seconds = 2 }
+            "#,
+        )
+        .unwrap();
+        // 0-3 s (longest animation), "next" 3-4 s, then a 2 s pause.
+        assert_eq!(engine.duration(), 6.0);
+    }
+
+    #[test]
+    fn methods_inside_play_are_rejected() {
+        let error = load("local a = Circle {}\nplay { a:shift(UP) }")
+            .err()
+            .unwrap();
+        assert!(
+            error.starts_with("test.lua:2: a method like box:shift(UP)"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unknown_block_options_are_rejected() {
+        let error = load("local a = Circle {}\nplay { fade_in(a), secs = 2 }")
+            .err()
+            .unwrap();
+        assert_eq!(error, "test.lua:2: play has no option secs");
     }
 
     #[test]

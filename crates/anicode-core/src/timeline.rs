@@ -1,41 +1,43 @@
 use std::collections::HashMap;
 
-/// Start and end time of an `at` block, in seconds.
+/// An `at` or `play` block as the scene declares it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Block {
+    /// The marker name that can pin it. Unnamed `play` blocks are numbered.
+    pub name: String,
+    /// How long the block lasts before the next one, from `seconds = n`.
+    pub seconds: Option<f64>,
+}
+
+/// Start and end time of a block, in seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BlockTime {
     pub start: f64,
     pub end: f64,
 }
 
-/// Places blocks in the order they appear in the scene. A block starts at its
-/// marker if one is set, otherwise `default_seconds` after the previous block.
-/// Each block ends where the next one starts; the last one runs for
-/// `default_seconds`.
+/// Places blocks in the order the scene declares them. A block starts at
+/// its marker if one is set, otherwise where the previous block ends. It
+/// lasts its `seconds` if set, otherwise `default_seconds` or its longest
+/// animation, whichever is longer, so the next block never cuts one short.
 pub fn block_times(
-    block_names: &[String],
+    blocks: &[Block],
+    longest_animations: &[f64],
     markers: &HashMap<String, f64>,
     default_seconds: f64,
 ) -> Vec<BlockTime> {
-    let mut starts: Vec<f64> = Vec::with_capacity(block_names.len());
-    for name in block_names {
-        let start = match markers.get(name) {
-            Some(&time) => time,
-            None => starts
-                .last()
-                .map_or(0.0, |previous| previous + default_seconds),
-        };
-        starts.push(start);
-    }
-
-    starts
+    let mut next_start = 0.0;
+    blocks
         .iter()
-        .enumerate()
-        .map(|(i, &start)| BlockTime {
-            start,
-            end: starts
-                .get(i + 1)
-                .copied()
-                .unwrap_or(start + default_seconds),
+        .zip(longest_animations)
+        .map(|(block, &longest)| {
+            let start = markers.get(&block.name).copied().unwrap_or(next_start);
+            let length = block.seconds.unwrap_or(default_seconds.max(longest));
+            next_start = start + length;
+            BlockTime {
+                start,
+                end: next_start,
+            }
         })
         .collect()
 }
@@ -44,53 +46,36 @@ pub fn block_times(
 mod tests {
     use super::*;
 
-    fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(|name| name.to_string()).collect()
+    fn block(name: &str, seconds: Option<f64>) -> Block {
+        Block {
+            name: name.to_string(),
+            seconds,
+        }
+    }
+
+    fn time(start: f64, end: f64) -> BlockTime {
+        BlockTime { start, end }
     }
 
     #[test]
-    fn missing_markers_use_default_spacing() {
-        let times = block_times(&names(&["a", "b"]), &HashMap::new(), 2.0);
-        assert_eq!(
-            times[0],
-            BlockTime {
-                start: 0.0,
-                end: 2.0
-            }
-        );
-        assert_eq!(
-            times[1],
-            BlockTime {
-                start: 2.0,
-                end: 4.0
-            }
-        );
+    fn unpinned_blocks_follow_each_other() {
+        let blocks = [block("1", None), block("2", Some(3.0)), block("3", None)];
+        let times = block_times(&blocks, &[0.0, 0.0, 0.0], &HashMap::new(), 2.0);
+        assert_eq!(times, [time(0.0, 2.0), time(2.0, 5.0), time(5.0, 7.0)]);
     }
 
     #[test]
-    fn markers_set_block_starts() {
-        let markers = HashMap::from([("a".to_string(), 1.0), ("b".to_string(), 5.0)]);
-        let times = block_times(&names(&["a", "b", "c"]), &markers, 2.0);
-        assert_eq!(
-            times[0],
-            BlockTime {
-                start: 1.0,
-                end: 5.0
-            }
-        );
-        assert_eq!(
-            times[1],
-            BlockTime {
-                start: 5.0,
-                end: 7.0
-            }
-        );
-        assert_eq!(
-            times[2],
-            BlockTime {
-                start: 7.0,
-                end: 9.0
-            }
-        );
+    fn long_animations_extend_their_block() {
+        let blocks = [block("1", None), block("2", None)];
+        let times = block_times(&blocks, &[4.0, 1.0], &HashMap::new(), 2.0);
+        assert_eq!(times, [time(0.0, 4.0), time(4.0, 6.0)]);
+    }
+
+    #[test]
+    fn markers_pin_blocks_and_later_ones_follow() {
+        let blocks = [block("intro", None), block("drop", None), block("3", None)];
+        let markers = HashMap::from([("drop".to_string(), 10.0)]);
+        let times = block_times(&blocks, &[0.0; 3], &markers, 2.0);
+        assert_eq!(times, [time(0.0, 2.0), time(10.0, 12.0), time(12.0, 14.0)]);
     }
 }

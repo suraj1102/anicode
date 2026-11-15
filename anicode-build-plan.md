@@ -63,6 +63,9 @@ A scene is a single `.lua` file that builds objects once, then attaches animatio
 | Function | What it does |
 | --- | --- |
 | `at "name" { ... }` | starts these animations at marker `name`; each lasts `default_animation_seconds` (1 s) unless it has `:over(seconds)` |
+| `play { ... }` | an unnamed step: starts where the previous block ends. Steps are numbered 1, 2, 3 for markers |
+| `seconds = n` inside `at` or `play` | how long the block lasts before the next one. Default: `default_block_seconds` or its longest animation, whichever is longer |
+| `shift`, `scale`, `rotate` | function forms of the node methods, for use inside `play` (a method there would change the value right away) |
 | `param("name", default)` | a value you can override from the project without editing code |
 | `animate(value, target)` | tweens a property; chain `:over(seconds)`, `:ease("inout")` |
 | `fade_in`, `fade_out`, `write`, `morph`, `move_to` | the common Manim-style animations |
