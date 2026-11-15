@@ -55,8 +55,12 @@ impl AnicodeEngine {
     fn load(&mut self, scene_changed: bool) -> Result<(Engine, Config), String> {
         let config = Config::find_for(&self.scene)?;
         // Searching for the project walks the folders, so only do it when
-        // the scene itself changes (or opens).
-        if scene_changed {
+        // the scene itself changes (or opens), or the project went away.
+        let project_gone = self
+            .project
+            .as_deref()
+            .is_some_and(|project| !project.is_file());
+        if scene_changed || project_gone {
             self.project = shotcut::find_project(&config.root, &self.scene);
         }
         self.project_modified = self.project.as_deref().and_then(modified_time);

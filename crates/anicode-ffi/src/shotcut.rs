@@ -30,6 +30,11 @@ pub fn find_project(root: &Path, scene: &Path) -> Option<PathBuf> {
             if path.extension().is_none_or(|extension| extension != "mlt") {
                 continue;
             }
+            // Shotcut writes a short-lived copy of the project next to it
+            // while saving. It looks newest but is gone a moment later.
+            if entry.file_name().to_string_lossy().starts_with("shotcut-") {
+                continue;
+            }
             let Ok(xml) = std::fs::read_to_string(&path) else {
                 continue;
             };
@@ -307,6 +312,19 @@ mod tests {
             PROJECT.replace("shape.lua", "../shape.lua"),
         )
         .unwrap();
+        // Shotcut's temporary copy while saving: newer, but must be skipped.
+        std::fs::write(
+            root.join("episode/shotcut-AbC123.mlt"),
+            PROJECT.replace("shape.lua", "../shape.lua"),
+        )
+        .unwrap();
+        let later = SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(root.join("episode/shotcut-AbC123.mlt"))
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
         // A wrapper mentions the scene but is not a project.
         std::fs::write(
             root.join("shape.mlt"),
