@@ -1,0 +1,7 @@
+/* Rendered output shown under each example's code. */
+.preview {
+  display: block;
+  width: 100%;
+  border-radius: 6px;
+  margin: 0.5em 0 1.5em;
+}

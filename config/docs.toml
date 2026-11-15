@@ -1,0 +1,6 @@
+# Settings for scripts/docs-media.sh, which renders the docs examples.
+[media]
+# Width of the videos and images in pixels. Height follows the 16:9 frame.
+width = 960
+# Scenes are transparent; the docs show them over this color.
+background = "#1e1e24"

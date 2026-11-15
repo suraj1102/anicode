@@ -26,3 +26,7 @@
 
 # macOS
 .DS_Store
+
+# Docs build output and the videos rendered for it
+/docs/book
+/docs/src/media
