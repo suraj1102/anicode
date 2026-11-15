@@ -60,9 +60,9 @@ pub fn clip_markers(project: &Path, scene: &Path) -> Result<HashMap<String, f64>
 }
 
 fn is_project_with_scene(xml: &str, project_dir: &Path, scene: &Path) -> bool {
-    // Cheap checks first. Wrappers written by `anicode new` name the scene
-    // too, but have no timeline (tractor).
-    if !xml.contains("anicode") || !xml.contains("<tractor") {
+    // Wrappers written by `anicode new` name the scene too, but have no
+    // timeline (tractor).
+    if !xml.contains("<tractor") {
         return false;
     }
     Document::parse(xml)
@@ -119,7 +119,7 @@ fn frame_rate(document: &Document) -> Result<f64, String> {
     Ok(number("frame_rate_num")? / number("frame_rate_den")?)
 }
 
-/// Ids of the producers that render `scene` with the anicode service.
+/// Ids of the producers and chains that render `scene`.
 fn scene_producer_ids<'a>(
     document: &'a Document,
     project_dir: &Path,
@@ -129,13 +129,32 @@ fn scene_producer_ids<'a>(
     document
         .descendants()
         .filter(|node| node.has_tag_name("producer") || node.has_tag_name("chain"))
-        .filter(|node| property(*node, "mlt_service") == Some("anicode"))
-        .filter(|node| {
-            property(*node, "resource")
-                .is_some_and(|resource| normalize(&project_dir.join(resource)) == scene)
-        })
+        .filter(|node| renders_scene(*node, project_dir, &scene, true))
         .filter_map(|node| node.attribute("id"))
         .collect()
+}
+
+fn renders_scene(node: Node, dir: &Path, scene: &Path, follow_wrappers: bool) -> bool {
+    let Some(resource) = property(node, "resource") else {
+        return false;
+    };
+    let path = normalize(&dir.join(resource));
+    match property(node, "mlt_service") {
+        Some("anicode") => path == scene,
+        // A wrapper dragged into a project becomes a virtual clip that
+        // points at the wrapper file, so look inside it.
+        Some("xml-clip" | "xml") if follow_wrappers => {
+            let wrapper_dir = path.parent().unwrap_or(Path::new("/"));
+            std::fs::read_to_string(&path).is_ok_and(|xml| {
+                Document::parse(&xml).is_ok_and(|wrapper| {
+                    wrapper
+                        .descendants()
+                        .any(|node| renders_scene(node, wrapper_dir, scene, false))
+                })
+            })
+        }
+        _ => false,
+    }
 }
 
 /// Where the first clip of the scene starts on the timeline, and its
@@ -170,7 +189,11 @@ fn clip_placement(
     Ok(None)
 }
 
+/// MLT accepts a property as a child element or as an attribute.
 fn property<'a>(node: Node<'a, '_>, name: &str) -> Option<&'a str> {
+    if let Some(value) = node.attribute(name) {
+        return Some(value);
+    }
     node.children()
         .find(|child| child.has_tag_name("property") && child.attribute("name") == Some(name))
         .and_then(|child| child.text())
@@ -241,6 +264,31 @@ mod tests {
             markers_from_xml(&project, Path::new("/p"), Path::new("/p/shape.lua")).unwrap();
         // "shape:intro" at 3.96 s beats "intro" at 1.08 s; clip starts at 1.08 s, trimmed by 0.5 s.
         assert!((markers["intro"] - 3.38).abs() < 1e-9);
+    }
+
+    #[test]
+    fn follows_virtual_clips_to_their_wrapper() {
+        let root = std::env::temp_dir().join(format!("anicode-virtual-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("shape.mlt"),
+            r#"<mlt><producer id="shape" mlt_service="anicode"><property name="resource">shape.lua</property></producer></mlt>"#,
+        )
+        .unwrap();
+        // How Shotcut 26.9 saves a wrapper dragged onto the timeline.
+        let project = PROJECT
+            .replace(
+                r#"<property name="resource">shape.lua</property>"#,
+                r#"<property name="resource">shape.mlt</property>"#,
+            )
+            .replace(
+                r#"<property name="mlt_service">anicode</property>"#,
+                r#"<property name="mlt_service">xml-clip</property>"#,
+            );
+
+        let markers = markers_from_xml(&project, &root, &root.join("shape.lua"));
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!((markers.unwrap()["move"] - 2.88).abs() < 1e-9);
     }
 
     #[test]
