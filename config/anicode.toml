@@ -18,7 +18,7 @@ default_animation_seconds = 1.0
 width = 640
 height = 360
 # Scenes in examples/ that have reference frames in tests/golden/.
-scenes = ["basics", "math"]
+scenes = ["basics", "math", "sequence"]
 # Points in each example to check, as fractions of the scene length. Most
 # fall inside animations, so timing changes show up.
 points = [0.0, 0.1, 0.35, 0.6, 1.0]
