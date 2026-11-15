@@ -173,6 +173,15 @@ impl Scene {
         Ok(())
     }
 
+    /// Each block's name and start time in seconds, in scene order.
+    pub fn block_starts(&self) -> Vec<(String, f64)> {
+        self.blocks
+            .iter()
+            .zip(&self.block_times)
+            .map(|(block, time)| (block.name.clone(), time.start))
+            .collect()
+    }
+
     /// Scene length in seconds: when the last block or animation ends.
     pub fn duration(&self) -> f64 {
         self.block_times

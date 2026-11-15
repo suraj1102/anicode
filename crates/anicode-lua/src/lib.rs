@@ -106,6 +106,11 @@ impl Engine {
         })
     }
 
+    /// Each `at` and `play` block's name and start time in seconds.
+    pub fn block_starts(&self) -> Vec<(String, f64)> {
+        self.state.scene.borrow().block_starts()
+    }
+
     /// Scene length in seconds.
     pub fn duration(&self) -> f64 {
         self.state.scene.borrow().duration()
@@ -286,6 +291,15 @@ mod tests {
         .unwrap();
         // 0-3 s (longest animation), "next" 3-4 s, then a 2 s pause.
         assert_eq!(engine.duration(), 6.0);
+        let starts = engine.block_starts();
+        assert_eq!(
+            starts,
+            [
+                ("1".to_string(), 0.0),
+                ("next".to_string(), 3.0),
+                ("2".to_string(), 4.0)
+            ]
+        );
     }
 
     #[test]
