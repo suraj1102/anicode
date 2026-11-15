@@ -28,6 +28,10 @@ pub enum Shape {
         points: Vec<Point>,
         closed: bool,
     },
+    /// A ready-made outline in scene units, such as typeset math.
+    Outline {
+        path: BezPath,
+    },
 }
 
 #[derive(Debug)]
@@ -102,6 +106,10 @@ impl Scene {
 
     pub fn add_path(&mut self, points: Vec<Point>, closed: bool) -> NodeId {
         self.add_node(Shape::Path { points, closed }, vec![])
+    }
+
+    pub fn add_outline(&mut self, path: BezPath) -> NodeId {
+        self.add_node(Shape::Outline { path }, vec![])
     }
 
     fn add_node(
@@ -252,6 +260,7 @@ impl Scene {
             }
             Shape::Line { from, to } => polyline(&[*from, *to], false),
             Shape::Path { points, closed } => polyline(points, *closed),
+            Shape::Outline { path } => path.clone(),
         };
         Ok(Some(path))
     }

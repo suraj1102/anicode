@@ -4,7 +4,7 @@
 use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;
 
-use anicode_core::kurbo::Point;
+use anicode_core::kurbo::{Affine, Point};
 use anicode_core::{Animation, Color, Easing, Frame, NodeId, PropertyId, Scene, Target};
 use mlua::{
     AnyUserData, Error, Function, Lua, MetaMethod, Result, Table, UserData, UserDataMethods, Value,
@@ -41,7 +41,7 @@ pub(crate) fn register(lua: &Lua, state: &Shared) -> Result<()> {
     let globals = lua.globals();
     lua.set_named_registry_value(DERIVES, lua.create_table()?)?;
 
-    for kind in ["Group", "Rect", "Circle", "Line", "Path"] {
+    for kind in ["Group", "Rect", "Circle", "Line", "Path", "Math", "Tex"] {
         let state = state.clone();
         let constructor = lua.create_function(move |lua, options: Option<Table>| {
             create_node(lua, &state, kind, options)
@@ -193,6 +193,7 @@ fn create_node(
         "Circle" => &["r"],
         "Line" => &["from", "to"],
         "Path" => &["points", "closed"],
+        "Math" | "Tex" => &["size"],
         _ => &[],
     };
     let common_keys = [
@@ -208,10 +209,13 @@ fn create_node(
     ];
     for pair in options.pairs::<Value, Value>() {
         let (key, _) = pair?;
-        let known = key
-            .as_string()
-            .and_then(|key| key.to_str().ok())
-            .is_some_and(|key| shape_keys.contains(&&*key) || common_keys.contains(&&*key));
+        // Math and Tex take their source as the first, unnamed value.
+        let is_source = matches!(kind, "Math" | "Tex") && key == Value::Integer(1);
+        let known = is_source
+            || key
+                .as_string()
+                .and_then(|key| key.to_str().ok())
+                .is_some_and(|key| shape_keys.contains(&&*key) || common_keys.contains(&&*key));
         if !known {
             return Err(Error::runtime(format!(
                 "{kind} has no option {}",
@@ -251,6 +255,22 @@ fn create_node(
                 options.get::<Option<bool>>("closed")?.unwrap_or(false),
             )
         }
+        "Math" | "Tex" => {
+            let source = options.get::<Option<String>>(1)?.ok_or_else(|| {
+                Error::runtime(format!(
+                    "{kind} needs its source first, like {kind} {{ \"x^2\" }}"
+                ))
+            })?;
+            let outline = if kind == "Math" {
+                anicode_text::typst_math(&source)
+            } else {
+                anicode_text::latex_math(&source)
+            }
+            .map_err(Error::runtime)?;
+            // The outline is in ems; `size` is one em in scene units.
+            let size = number_or("size", 0.5)?;
+            scene.add_outline(Affine::scale(size) * outline)
+        }
         _ => unreachable!("only known shapes are registered"),
     };
 
@@ -262,8 +282,14 @@ fn create_node(
         .get::<Option<Table>>("stroke")?
         .map(color)
         .transpose()?;
+    let mut fill = fill;
     if fill.is_none() && stroke.is_none() {
-        stroke = Some([1.0; 4]);
+        // Text reads best filled; other shapes default to outlines.
+        if matches!(kind, "Math" | "Tex") {
+            fill = Some([1.0; 4]);
+        } else {
+            stroke = Some([1.0; 4]);
+        }
     }
     let node = &mut scene.nodes[id];
     node.fill = fill;

@@ -266,6 +266,14 @@ mod tests {
     }
 
     #[test]
+    fn math_errors_name_the_line() {
+        let error = load("local ok = Tex { [[\\frac{1}{2}]] }\nlocal bad = Math { \"x = #nope\" }")
+            .err()
+            .unwrap();
+        assert!(error.starts_with("test.lua:2: math: "), "{error}");
+    }
+
+    #[test]
     fn unknown_shape_options_are_rejected() {
         let error = load("Rect { widht = 2 }").err().unwrap();
         assert!(error.contains("Rect has no option widht"), "{error}");
