@@ -4,6 +4,8 @@
 
 # Program output
 /.anicode
+# Shotcut projects for local work, outside the examples
+/projects
 /frames
 /run
 /output
