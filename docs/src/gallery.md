@@ -57,3 +57,50 @@ Typst and LaTeX math side by side.
 ```
 
 <video class="preview" src="media/gallery-math.mp4" autoplay loop muted playsinline></video>
+
+## Steps
+
+Unnamed `play` steps, one with a longer hold, and a named `at` block among
+them.
+
+```lua
+{{#include ../../examples/steps.lua}}
+```
+
+<video class="preview" src="media/gallery-steps.mp4" autoplay loop muted playsinline></video>
+
+## Sequence
+
+`play` steps that follow each other, and an `at` block that a Shotcut marker
+can pin.
+
+```lua
+{{#include ../../examples/sequence.lua}}
+```
+
+<video class="preview" src="media/gallery-sequence.mp4" autoplay loop muted playsinline></video>
+
+## LED box
+
+A child shape that moves and fades with its parent, lit up by `derive`.
+
+```lua
+{{#include ../../examples/shape.lua}}
+```
+
+<video class="preview" src="media/gallery-shape.mp4" autoplay loop muted playsinline></video>
+
+## Params
+
+The example to open in the [editor](params.md#the-editor): params for
+positions and targets, a label that follows the dot, and a params file.
+
+```lua
+{{#include ../../examples/drag.lua}}
+```
+
+```lua
+{{#include ../../examples/drag.params.lua}}
+```
+
+<video class="preview" src="media/gallery-drag.mp4" autoplay loop muted playsinline></video>
