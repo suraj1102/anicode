@@ -4,6 +4,13 @@
 # The preview renders at this fraction of the render size in anicode.toml.
 scale = 0.5
 
+[drag]
+# Dragged params are rounded to this step (scene units, or radians for
+# rotation), so the params file stays readable.
+step = 0.001
+# Preview pixels around a thin line that still count as clicking it.
+hit_slop = 4.0
+
 [watch]
 # How often to check the scene, params and Shotcut project files for
 # changes, in seconds.

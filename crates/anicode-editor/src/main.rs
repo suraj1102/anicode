@@ -1,22 +1,37 @@
 //! A preview window for a scene: play it, scrub it, and see edits to the
-//! scene and its params file as soon as they are saved.
+//! scene and its params file as soon as they are saved. Dragging a shape
+//! changes the params that place it and writes them to the params file.
+
+mod drag;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
-use anicode_core::DrawItem;
-use anicode_lua::{Config, Engine, load_scene, params_path};
+use anicode_core::kurbo::{Point, Shape as _};
+use anicode_core::{DrawItem, NodeId, hit_test};
+use anicode_lua::{
+    Config, Engine, ParamValue, Params, load_scene, params_path, read_params, write_params,
+};
 use anicode_render::CpuRenderer;
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, TextureHandle};
 use serde::Deserialize;
+
+use drag::{Drag, Mode};
 
 const CONFIG_FILE: &str = "config/editor.toml";
 
 #[derive(Deserialize)]
 struct EditorConfig {
     preview: PreviewConfig,
+    drag: DragConfig,
     watch: WatchConfig,
+}
+
+#[derive(Deserialize)]
+struct DragConfig {
+    step: f64,
+    hit_slop: f64,
 }
 
 #[derive(Deserialize)]
@@ -81,6 +96,11 @@ struct Editor {
     /// What the preview shows, for picking shapes under the cursor.
     items: Vec<DrawItem>,
     needs_render: bool,
+    /// The node last clicked, outlined in the preview.
+    selected: Option<NodeId>,
+    drag: Option<Drag>,
+    /// What the last click or drag did, or why it could not.
+    message: String,
 }
 
 impl Editor {
@@ -103,6 +123,9 @@ impl Editor {
             texture: None,
             items: vec![],
             needs_render: true,
+            selected: None,
+            drag: None,
+            message: String::new(),
         };
         editor.reload();
         editor
@@ -224,6 +247,11 @@ impl Editor {
         if let Some(error) = &self.error {
             ui.colored_label(Color32::LIGHT_RED, error);
         }
+        ui.label(if self.message.is_empty() {
+            "Drag a shape to move it, with Shift to scale it, with Alt to rotate it."
+        } else {
+            &self.message
+        });
     }
 
     fn toggle_play(&mut self) {
@@ -235,7 +263,7 @@ impl Editor {
     }
 
     fn preview(&mut self, ui: &mut egui::Ui) {
-        let (area, _) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let (area, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let Some(texture) = &self.texture else {
             return;
         };
@@ -244,6 +272,128 @@ impl Editor {
         ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
         let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
         ui.painter().image(texture.id(), rect, uv, Color32::WHITE);
+
+        // Preview pixels per screen point.
+        let scale = f64::from(texture.size()[0] as f32 / rect.width());
+        let to_pixels = |pos: Pos2| {
+            Point::new(
+                f64::from(pos.x - rect.left()) * scale,
+                f64::from(pos.y - rect.top()) * scale,
+            )
+        };
+        if response.drag_started()
+            && let Some(origin) = ui.input(|input| input.pointer.press_origin())
+        {
+            let modifiers = ui.input(|input| input.modifiers);
+            let mode = if modifiers.shift {
+                Mode::Scale
+            } else if modifiers.alt {
+                Mode::Rotate
+            } else {
+                Mode::Move
+            };
+            self.start_drag(to_pixels(origin), mode);
+        } else if response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            self.pick(to_pixels(pos));
+        }
+        if response.dragged()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            self.drag_to(to_pixels(pos));
+        }
+        if response.drag_stopped() {
+            self.drag = None;
+        }
+
+        let outline = self
+            .items
+            .iter()
+            .find(|item| Some(item.node) == self.selected);
+        if let Some(item) = outline {
+            let bounds = item.transform.transform_rect_bbox(item.path.bounding_box());
+            let to_screen = |x: f64, y: f64| {
+                rect.left_top() + egui::vec2((x / scale) as f32, (y / scale) as f32)
+            };
+            let bounds = Rect::from_min_max(
+                to_screen(bounds.x0, bounds.y0),
+                to_screen(bounds.x1, bounds.y1),
+            );
+            ui.painter().rect_stroke(
+                bounds.expand(2.0),
+                0.0,
+                Stroke::new(1.0, Color32::from_rgb(255, 227, 82)),
+                egui::StrokeKind::Outside,
+            );
+        }
+    }
+
+    /// Selects the topmost shape at `point` (in preview pixels).
+    fn pick(&mut self, point: Point) -> Option<usize> {
+        let hit = hit_test(&self.items, point, self.settings.drag.hit_slop);
+        self.selected = hit.map(|index| self.items[index].node);
+        if hit.is_none() {
+            self.message = "Nothing to drag there.".into();
+        }
+        hit
+    }
+
+    fn start_drag(&mut self, point: Point, mode: Mode) {
+        self.drag = None;
+        self.playing = false;
+        let Some(index) = self.pick(point) else {
+            return;
+        };
+        let Some(loaded) = &self.loaded else {
+            return;
+        };
+        let params_file = params_path(&self.scene);
+        let file = if params_file.is_file() {
+            read_params(&params_file)
+        } else {
+            Ok(Params::new())
+        };
+        let started = file.and_then(|file| {
+            Drag::start(
+                &loaded.engine,
+                &self.items[index],
+                mode,
+                point,
+                self.time,
+                file,
+            )
+        });
+        match started {
+            Ok(drag) => {
+                self.message = format!("Dragging {}.", drag.param_names().join(" and "));
+                self.drag = Some(drag);
+            }
+            Err(error) => self.message = error,
+        }
+    }
+
+    fn drag_to(&mut self, point: Point) {
+        let Some(drag) = &self.drag else {
+            return;
+        };
+        let params = drag.params_at(point, self.settings.drag.step);
+        let written: Vec<String> = drag
+            .param_names()
+            .iter()
+            .map(|name| format!("{name} = {}", show_value(params[*name])))
+            .collect();
+        let params_file = params_path(&self.scene);
+        match write_params(&params_file, &params) {
+            Ok(()) => {
+                self.message = format!("Wrote {}.", written.join(", "));
+                self.reload();
+            }
+            Err(error) => {
+                self.message = error;
+                self.drag = None;
+            }
+        }
     }
 }
 
@@ -278,6 +428,13 @@ fn load(scene: &Path, project: Option<&Path>) -> Result<Loaded, String> {
     };
     let engine = load_scene(scene, &config, &markers)?;
     Ok(Loaded { engine, config })
+}
+
+fn show_value(value: ParamValue) -> String {
+    match value {
+        ParamValue::Number(number) => number.to_string(),
+        ParamValue::Vec(x, y) => format!("{{ {x}, {y} }}"),
+    }
 }
 
 fn modified_time(path: &Path) -> Option<SystemTime> {
