@@ -10,12 +10,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use anicode_lua::{Config, Engine, Settings};
+use anicode_lua::{Config, Engine, Settings, params_path};
 use anicode_render::{CpuRenderer, ImageAlphaType};
 
 pub struct AnicodeEngine {
     scene: PathBuf,
     scene_modified: Option<SystemTime>,
+    params_modified: Option<SystemTime>,
     /// The Shotcut project whose markers time the scene, if one was found.
     project: Option<PathBuf>,
     project_modified: Option<SystemTime>,
@@ -27,16 +28,22 @@ pub struct AnicodeEngine {
 }
 
 impl AnicodeEngine {
-    /// Reloads when the scene file or the Shotcut project changes. Saving
-    /// the project after moving a marker therefore re-times the scene.
+    /// Reloads when the scene file, its params file or the Shotcut project
+    /// changes. Saving the project after moving a marker therefore re-times
+    /// the scene.
     fn reload_if_changed(&mut self) -> c_int {
         let scene_modified = modified_time(&self.scene);
         let scene_changed = scene_modified.is_none() || scene_modified != self.scene_modified;
+        let params_modified = modified_time(&params_path(&self.scene));
         let project_modified = self.project.as_deref().and_then(modified_time);
-        if !scene_changed && project_modified == self.project_modified {
+        if !scene_changed
+            && params_modified == self.params_modified
+            && project_modified == self.project_modified
+        {
             return 0;
         }
         self.scene_modified = scene_modified;
+        self.params_modified = params_modified;
         match self.load(scene_changed) {
             Ok(loaded) => {
                 self.loaded = Some(loaded);
@@ -175,6 +182,7 @@ pub unsafe extern "C" fn anicode_open(scene_path: *const c_char) -> *mut Anicode
         let mut engine = AnicodeEngine {
             scene: PathBuf::from(path),
             scene_modified: None,
+            params_modified: None,
             project: None,
             project_modified: None,
             loaded: None,
@@ -346,6 +354,37 @@ mod tests {
         assert_eq!(unsafe { anicode_reload_if_changed(engine) }, 1);
         let duration = unsafe { anicode_duration(engine) };
         assert!((duration - (4.0 + 2.0)).abs() < 1e-9, "{duration}");
+
+        unsafe { anicode_close(engine) };
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn reloads_when_the_params_file_changes() {
+        let root = std::env::temp_dir().join(format!("anicode-params-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        std::fs::copy(
+            repo.join("config/anicode.toml"),
+            root.join("config/anicode.toml"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("wait.lua"),
+            "play { seconds = param(\"wait\", 2) }\n",
+        )
+        .unwrap();
+
+        let engine = open(root.join("wait.lua").to_str().unwrap());
+        assert_eq!(
+            unsafe { anicode_duration(engine) },
+            2.0,
+            "{}",
+            error(engine)
+        );
+        std::fs::write(root.join("wait.params.lua"), "return { wait = 3 }\n").unwrap();
+        assert_eq!(unsafe { anicode_reload_if_changed(engine) }, 1);
+        assert_eq!(unsafe { anicode_duration(engine) }, 3.0);
 
         unsafe { anicode_close(engine) };
         std::fs::remove_dir_all(&root).unwrap();
