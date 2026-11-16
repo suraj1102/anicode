@@ -29,7 +29,6 @@ mod tests {
     fn item(path: impl Shape, x: f64, fill: bool) -> DrawItem {
         DrawItem {
             node: 0,
-            parent_transform: Affine::IDENTITY,
             path: path.to_path(0.01),
             transform: Affine::translate((x, 0.0)) * Affine::scale(10.0),
             fill: fill.then_some([1.0; 4]),

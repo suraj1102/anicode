@@ -63,9 +63,6 @@ impl Node {
 pub struct DrawItem {
     /// The node this shape belongs to.
     pub node: NodeId,
-    /// Maps the node's parent space (where its x and y live) to pixels, so a
-    /// drag in the frame can be turned into a change of x and y.
-    pub parent_transform: Affine,
     pub path: BezPath,
     pub transform: Affine,
     pub fill: Option<Color>,
@@ -205,21 +202,15 @@ impl Scene {
         height: u32,
         frame_height: f64,
     ) -> Result<Vec<DrawItem>, E> {
-        let pixels_per_unit = f64::from(height) / frame_height;
-        let to_pixels = Affine::translate((f64::from(width) / 2.0, f64::from(height) / 2.0))
-            * Affine::scale_non_uniform(pixels_per_unit, -pixels_per_unit);
+        let to_pixels = to_pixels(width, height, frame_height);
         // Curves are flattened to within a tenth of a pixel.
-        let tolerance = 0.1 / pixels_per_unit;
+        let tolerance = 0.1 * frame_height / f64::from(height);
 
         let mut world: Vec<Option<(Affine, f64)>> = vec![None; self.nodes.len()];
         let mut items = Vec::new();
         for id in 0..self.nodes.len() {
             let (transform, opacity) = self.world_transform(id, value, &mut world)?;
             let node = &self.nodes[id];
-            let parent_transform = match node.parent {
-                Some(parent) => self.world_transform(parent, value, &mut world)?.0,
-                None => Affine::IDENTITY,
-            };
             if opacity <= 0.0 {
                 continue;
             }
@@ -229,7 +220,6 @@ impl Scene {
             let stroke_width = value(node.required("stroke_width"))?;
             items.push(DrawItem {
                 node: id,
-                parent_transform: to_pixels * parent_transform,
                 path,
                 transform: to_pixels * transform,
                 fill: node.fill.map(|color| with_opacity(color, opacity)),
@@ -239,6 +229,26 @@ impl Scene {
             });
         }
         Ok(items)
+    }
+
+    /// Maps a node's parent space (where its x and y live) and the node's
+    /// own space to pixels, so a drag can turn cursor movement into x and y.
+    pub fn transforms<E>(
+        &self,
+        id: NodeId,
+        value: &mut dyn FnMut(PropertyId) -> Result<f64, E>,
+        width: u32,
+        height: u32,
+        frame_height: f64,
+    ) -> Result<(Affine, Affine), E> {
+        let to_pixels = to_pixels(width, height, frame_height);
+        let mut world = vec![None; self.nodes.len()];
+        let node = self.world_transform(id, value, &mut world)?.0;
+        let parent = match self.nodes[id].parent {
+            Some(parent) => self.world_transform(parent, value, &mut world)?.0,
+            None => Affine::IDENTITY,
+        };
+        Ok((to_pixels * parent, to_pixels * node))
     }
 
     fn world_transform<E>(
@@ -293,6 +303,13 @@ impl Scene {
         };
         Ok(Some(path))
     }
+}
+
+/// Scene units have y pointing up and the origin at the center of the frame.
+fn to_pixels(width: u32, height: u32, frame_height: f64) -> Affine {
+    let pixels_per_unit = f64::from(height) / frame_height;
+    Affine::translate((f64::from(width) / 2.0, f64::from(height) / 2.0))
+        * Affine::scale_non_uniform(pixels_per_unit, -pixels_per_unit)
 }
 
 fn polyline(points: &[Point], closed: bool) -> BezPath {
@@ -352,6 +369,11 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].transform * Point::ZERO, Point::new(125.0, 50.0));
         assert_eq!(items[0].fill.unwrap()[3], 0.5);
+
+        let mut value = |id| Ok::<f64, Infallible>(scene.properties.value_at(id, 0.0));
+        let (parent, node) = scene.transforms(circle, &mut value, 200, 100, 4.0).unwrap();
+        assert_eq!(parent * Point::ZERO, Point::new(125.0, 50.0));
+        assert_eq!(node, items[0].transform);
     }
 
     #[test]

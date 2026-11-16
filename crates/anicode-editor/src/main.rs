@@ -344,20 +344,26 @@ impl Editor {
         let Some(index) = self.pick(point) else {
             return;
         };
-        let Some(loaded) = &self.loaded else {
+        let (Some(loaded), Some(texture)) = (&self.loaded, &self.texture) else {
             return;
         };
+        let [width, height] = texture.size();
         let started = Drag::start(
             &loaded.engine,
-            &self.items[index],
+            self.items[index].node,
             mode,
             point,
             self.time,
+            (width as u32, height as u32),
             self.settings.drag.min_gain,
         );
         match started {
             Ok(drag) => {
-                self.message = format!("Dragging {}.", drag.param_names().join(" and "));
+                self.message = format!(
+                    "Dragging {} ({}).",
+                    drag.param_names().join(" and "),
+                    drag.label
+                );
                 self.drag = Some(drag);
             }
             Err(error) => self.message = error,

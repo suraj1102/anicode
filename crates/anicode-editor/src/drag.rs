@@ -1,7 +1,7 @@
 //! Dragging a shape in the preview: turns cursor movement into new values
 //! for the params that place the shape.
 
-use anicode_core::DrawItem;
+use anicode_core::NodeId;
 use anicode_core::kurbo::{Affine, Point};
 use anicode_lua::{Engine, ParamPart, ParamRef, ParamValue, Params};
 
@@ -13,6 +13,8 @@ pub enum Mode {
 }
 
 pub struct Drag {
+    /// Names the node being dragged, like "Group on line 2".
+    pub label: String,
     mode: Mode,
     /// The params behind the properties this drag changes, in the order of
     /// `properties(mode)`.
@@ -37,45 +39,73 @@ fn properties(mode: Mode) -> &'static [&'static str] {
 }
 
 impl Drag {
-    /// Starts dragging `item` from `cursor` (in preview pixels). Fails with
-    /// a message when no param sets one of the properties the drag changes,
-    /// or when a param's gain is below `min_gain`, because then the shape
-    /// would barely follow the cursor.
+    /// Starts dragging `node` from `cursor` (in pixels of a `size` frame).
+    /// If no param places the node, its parents are tried, nearest first,
+    /// so a shape inside a component drags the component. Fails with the
+    /// node's own message when none of them can be dragged.
     pub fn start(
         engine: &Engine,
-        item: &DrawItem,
+        node: NodeId,
         mode: Mode,
         cursor: Point,
         time: f64,
+        size: (u32, u32),
         min_gain: f64,
     ) -> Result<Drag, String> {
+        let mut first_error = None;
+        let mut next = Some(node);
+        while let Some(node) = next {
+            match Drag::start_on(engine, node, mode, cursor, time, size, min_gain) {
+                Ok(drag) => return Ok(drag),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+            next = engine.parent(node);
+        }
+        Err(first_error.expect("the loop runs at least once"))
+    }
+
+    /// Fails when no param sets one of the properties the drag changes, or
+    /// when a param's gain is below `min_gain`, because then the shape would
+    /// barely follow the cursor.
+    fn start_on(
+        engine: &Engine,
+        node: NodeId,
+        mode: Mode,
+        cursor: Point,
+        time: f64,
+        (width, height): (u32, u32),
+        min_gain: f64,
+    ) -> Result<Drag, String> {
+        let label = engine.node_label(node);
         let mut params = vec![];
         for property in properties(mode) {
-            let param = engine.param_for(item.node, property, time)?;
+            let param = engine.param_for(node, property, time)?;
             if param.gain.abs() < min_gain {
                 return Err(format!(
-                    "{}: the animation that sets {property} has barely started; \
-                     scrub later to drag it",
-                    engine.node_label(item.node)
+                    "{label}: the animation that sets {property} has barely started; \
+                     scrub later to drag it"
                 ));
             }
             params.push(param);
         }
-        let to_parent = item.parent_transform.inverse();
-        let scale = (item.transform.determinant() / item.parent_transform.determinant())
+        let (parent_transform, transform) = engine.transforms(node, time, width, height)?;
+        let to_parent = parent_transform.inverse();
+        let scale = (transform.determinant() / parent_transform.determinant())
             .abs()
             .sqrt();
         Ok(Drag {
+            label,
             mode,
             params,
             start_values: engine.params(),
             to_parent,
             start: to_parent * cursor,
-            center: to_parent * (item.transform * Point::ZERO),
+            center: to_parent * (transform * Point::ZERO),
             scale,
         })
     }
-
     /// The names of the params this drag changes.
     pub fn param_names(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self.params.iter().map(|param| &*param.name).collect();
@@ -172,8 +202,20 @@ mod tests {
     }
 
     fn drag(engine: &Engine, mode: Mode, time: f64, from: Point) -> Result<Drag, String> {
-        let items = engine.display_list(time, WIDTH, HEIGHT).unwrap();
-        Drag::start(engine, &items[0], mode, from, time, MIN_GAIN)
+        let size = (WIDTH, HEIGHT);
+        Drag::start(
+            engine,
+            first_shape(engine),
+            mode,
+            from,
+            time,
+            size,
+            MIN_GAIN,
+        )
+    }
+
+    fn first_shape(engine: &Engine) -> NodeId {
+        engine.display_list(0.0, WIDTH, HEIGHT).unwrap()[0].node
     }
 
     const SCENE: &str = r#"
@@ -220,6 +262,20 @@ mod tests {
             .err()
             .unwrap();
         assert!(error.contains("x has barely started"), "{error}");
+    }
+
+    #[test]
+    fn shapes_without_a_param_drag_their_group() {
+        let engine = load(
+            r#"
+            local group = Group { pos = param("group.pos", vec(1, 0)), scale = 2 }
+            group:add(Circle { x = 0.5, fill = RED })
+            "#,
+        );
+        let drag = drag(&engine, Mode::Move, 0.0, pixel(2.0, 0.0)).unwrap();
+        assert_eq!(drag.label, "Group on line 2");
+        let file = drag.params_at(pixel(3.0, 1.0), 0.001);
+        assert_eq!(file["group.pos"], ParamValue::Vec(2.0, 1.0));
     }
 
     #[test]

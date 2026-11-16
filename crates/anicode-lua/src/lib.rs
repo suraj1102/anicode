@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use anicode_core::{Control, DrawItem, Frame, NodeId, ParamUse};
+use anicode_core::kurbo::Affine;
+use anicode_core::{Control, DrawItem, Frame, NodeId, ParamUse, PropertyId, Scene};
 use mlua::{Lua, Table};
 
 use bindings::State;
@@ -189,11 +190,45 @@ impl Engine {
         width: u32,
         height: u32,
     ) -> Result<Vec<DrawItem>, String> {
+        let frame_height = self.settings.frame_height;
+        self.at_time(time, |scene, value| {
+            scene.display_list(value, width, height, frame_height)
+        })
+    }
+
+    /// Maps `node`'s parent space (where its x and y live) and its own
+    /// space to pixels at `time`.
+    pub fn transforms(
+        &self,
+        node: NodeId,
+        time: f64,
+        width: u32,
+        height: u32,
+    ) -> Result<(Affine, Affine), String> {
+        let frame_height = self.settings.frame_height;
+        self.at_time(time, |scene, value| {
+            scene.transforms(node, value, width, height, frame_height)
+        })
+    }
+
+    pub fn parent(&self, node: NodeId) -> Option<NodeId> {
+        self.state.scene.borrow().nodes[node].parent
+    }
+
+    /// Runs `evaluate` with property values (derives included) at `time`.
+    fn at_time<T>(
+        &self,
+        time: f64,
+        evaluate: impl FnOnce(
+            &Scene,
+            &mut dyn FnMut(PropertyId) -> mlua::Result<f64>,
+        ) -> mlua::Result<T>,
+    ) -> Result<T, String> {
         *self.state.frame.borrow_mut() = Some(Frame::new(time));
         let result = {
             let scene = self.state.scene.borrow();
             let mut value = |id| bindings::property_value(&self.lua, &self.state, id);
-            scene.display_list(&mut value, width, height, self.settings.frame_height)
+            evaluate(&scene, &mut value)
         };
         *self.state.frame.borrow_mut() = None;
         result.map_err(|error| error_text(&error))
