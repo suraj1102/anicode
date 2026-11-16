@@ -61,6 +61,11 @@ impl Node {
 /// One shape to draw, in pixel space.
 #[derive(Clone, Debug)]
 pub struct DrawItem {
+    /// The node this shape belongs to.
+    pub node: NodeId,
+    /// Maps the node's parent space (where its x and y live) to pixels, so a
+    /// drag in the frame can be turned into a change of x and y.
+    pub parent_transform: Affine,
     pub path: BezPath,
     pub transform: Affine,
     pub fill: Option<Color>,
@@ -211,6 +216,10 @@ impl Scene {
         for id in 0..self.nodes.len() {
             let (transform, opacity) = self.world_transform(id, value, &mut world)?;
             let node = &self.nodes[id];
+            let parent_transform = match node.parent {
+                Some(parent) => self.world_transform(parent, value, &mut world)?.0,
+                None => Affine::IDENTITY,
+            };
             if opacity <= 0.0 {
                 continue;
             }
@@ -219,6 +228,8 @@ impl Scene {
             };
             let stroke_width = value(node.required("stroke_width"))?;
             items.push(DrawItem {
+                node: id,
+                parent_transform: to_pixels * parent_transform,
                 path,
                 transform: to_pixels * transform,
                 fill: node.fill.map(|color| with_opacity(color, opacity)),
