@@ -426,6 +426,13 @@ fn create_node(
 
     let mut bases = vec![];
     if let Some(pos) = options.get::<Option<Table>>("pos")? {
+        for key in ["x", "y"] {
+            if options.contains_key(key)? {
+                return Err(Error::runtime(format!(
+                    "{kind} has both pos and {key}; use one"
+                )));
+            }
+        }
         let [x, y] = tracked_vec(lua, &pos)?;
         bases.extend([("x", x), ("y", y)]);
     }

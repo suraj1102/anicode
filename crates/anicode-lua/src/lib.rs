@@ -430,6 +430,15 @@ mod tests {
     }
 
     #[test]
+    fn pos_with_x_or_y_is_rejected() {
+        let error = load("Circle { pos = vec(1, 2), y = -2 }").err().unwrap();
+        assert!(
+            error.ends_with("Circle has both pos and y; use one"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn unknown_shape_options_are_rejected() {
         let error = load("Rect { widht = 2 }").err().unwrap();
         assert!(error.contains("Rect has no option widht"), "{error}");
