@@ -41,6 +41,7 @@ for scene in docs/src/examples/*.lua; do
     render "$scene" "$(basename "$scene" .lua)"
 done
 for scene in examples/*.lua; do
+    case $scene in *.params.lua) continue ;; esac
     render "$scene" "gallery-$(basename "$scene" .lua)"
 done
 rm -rf "$frames"
