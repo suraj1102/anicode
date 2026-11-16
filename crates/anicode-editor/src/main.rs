@@ -32,6 +32,12 @@ struct EditorConfig {
     preview: PreviewConfig,
     drag: DragConfig,
     watch: WatchConfig,
+    history: HistoryConfig,
+}
+
+#[derive(Deserialize)]
+struct HistoryConfig {
+    folder: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -109,13 +115,17 @@ struct Editor {
     /// What the last click or drag did, or why it could not.
     message: String,
     history: History,
+    /// Where the history is saved, if the project folder was found.
+    history_file: Option<PathBuf>,
 }
 
 impl Editor {
     fn new(scene: PathBuf, settings: EditorConfig) -> Editor {
-        let project = Config::find_for(&scene)
-            .ok()
-            .and_then(|config| anicode_shotcut::find_project(&config.root, &scene));
+        let root = Config::find_for(&scene).ok().map(|config| config.root);
+        let project = root
+            .as_deref()
+            .and_then(|root| anicode_shotcut::find_project(root, &scene));
+        let history_file = root.map(|root| history_file(&root, &settings.history.folder, &scene));
         let mut editor = Editor {
             scene,
             settings,
@@ -135,10 +145,38 @@ impl Editor {
             drag: None,
             message: String::new(),
             history: History::new(Params::new()),
+            history_file,
         };
-        editor.history = History::new(editor.file_params().unwrap_or_default());
+        let params = editor.file_params().unwrap_or_default();
+        let saved = editor.history_file.as_deref().filter(|path| path.is_file());
+        match saved.map(History::load) {
+            Some(Ok(history)) => {
+                editor.history = history;
+                editor.history.record(params, "edited outside the editor");
+            }
+            Some(Err(error)) => {
+                editor.message = format!("Started a new history: {error}");
+                editor.history = History::new(params);
+            }
+            None => editor.history = History::new(params),
+        }
         editor.reload();
         editor
+    }
+
+    /// Adds a history state and saves the history.
+    fn record(&mut self, params: Params, label: &str) {
+        if self.history.record(params, label) {
+            self.save_history();
+        }
+    }
+
+    fn save_history(&mut self) {
+        if let Some(path) = &self.history_file
+            && let Err(error) = self.history.save(path)
+        {
+            self.message = error;
+        }
     }
 
     /// What the params file holds now. A missing file holds no params.
@@ -153,6 +191,7 @@ impl Editor {
 
     /// Writes the current history state to the params file.
     fn restore(&mut self) {
+        self.save_history();
         match save_params(&params_path(&self.scene), self.history.params()) {
             Ok(()) => self.reload(),
             Err(error) => self.message = error,
@@ -214,7 +253,7 @@ impl Editor {
             if self.drag.is_none()
                 && let Ok(params) = self.file_params()
             {
-                self.history.record(params, "edited outside the editor");
+                self.record(params, "edited outside the editor");
             }
             self.reload();
         }
@@ -367,7 +406,7 @@ impl Editor {
             && let Ok(params) = self.file_params()
         {
             let label = format!("drag {}", drag.param_names().join(" and "));
-            self.history.record(params, label);
+            self.record(params, &label);
         }
 
         let outline = self
@@ -534,6 +573,17 @@ impl Editor {
     }
 }
 
+/// `examples/drag.lua` keeps its history in
+/// `<root>/<folder>/examples/drag.toml`.
+fn history_file(root: &Path, folder: &Path, scene: &Path) -> PathBuf {
+    let scene = std::path::absolute(scene).unwrap_or_else(|_| scene.to_path_buf());
+    let relative = scene
+        .strip_prefix(root)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| PathBuf::from(scene.file_name().unwrap_or_default()));
+    root.join(folder).join(relative).with_extension("toml")
+}
+
 fn time_ago(when: SystemTime) -> String {
     let seconds = when.elapsed().map_or(0, |elapsed| elapsed.as_secs());
     match seconds {
@@ -641,6 +691,9 @@ mod tests {
             },
             // Check the files on every frame.
             watch: WatchConfig { poll_seconds: 0.0 },
+            history: HistoryConfig {
+                folder: PathBuf::from(".anicode/history"),
+            },
         };
         let scene = scene.to_path_buf();
         let mut harness = Harness::builder()
@@ -711,6 +764,21 @@ mod tests {
         harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
         harness.run_steps(1);
         assert_eq!(anicode_lua::read_params(&params_file).unwrap(), dragged);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn history_is_kept_after_reopening() {
+        let root = project("reopen", "Circle { r = param(\"size\", 1), fill = RED }\n");
+        let scene = root.join("scene.lua");
+        let mut harness = open(&scene);
+        std::fs::write(root.join("scene.params.lua"), "return { size = 2 }\n").unwrap();
+        harness.run_steps(2);
+        drop(harness);
+        assert!(root.join(".anicode/history/scene.toml").is_file());
+
+        let harness = open(&scene);
+        assert_eq!(harness.state().history.nodes().len(), 2);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

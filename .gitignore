@@ -3,6 +3,7 @@
 /build
 
 # Program output
+/.anicode
 /frames
 /run
 /output

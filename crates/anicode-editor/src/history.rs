@@ -1,9 +1,11 @@
 //! Undo and redo as a tree of params file states. Undoing and then making a
 //! new change starts a branch; the old branch stays and can be jumped to.
 
-use std::time::SystemTime;
+use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use anicode_lua::Params;
+use serde::{Deserialize, Serialize};
 
 pub struct HistoryNode {
     pub parent: Option<usize>,
@@ -91,6 +93,80 @@ impl History {
     pub fn jump(&mut self, node: usize) {
         self.current = node;
     }
+
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let saved = SavedHistory {
+            current: self.current,
+            nodes: self
+                .nodes
+                .iter()
+                .map(|node| SavedNode {
+                    parent: node.parent,
+                    label: node.label.clone(),
+                    when: node
+                        .when
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .map_or(0, |since| since.as_secs()),
+                    params: node.params.clone(),
+                })
+                .collect(),
+        };
+        let text = toml::to_string(&saved).map_err(|error| error.to_string())?;
+        let error = |error: std::io::Error| format!("{}: {error}", path.display());
+        if let Some(folder) = path.parent() {
+            std::fs::create_dir_all(folder).map_err(error)?;
+        }
+        std::fs::write(path, text).map_err(error)
+    }
+
+    pub fn load(path: &Path) -> Result<History, String> {
+        let error = |error: String| format!("{}: {error}", path.display());
+        let text = std::fs::read_to_string(path).map_err(|e| error(e.to_string()))?;
+        let saved: SavedHistory = toml::from_str(&text).map_err(|e| error(e.to_string()))?;
+        let mut nodes: Vec<HistoryNode> = saved
+            .nodes
+            .into_iter()
+            .map(|node| HistoryNode {
+                parent: node.parent,
+                children: vec![],
+                params: node.params,
+                label: node.label,
+                when: SystemTime::UNIX_EPOCH + Duration::from_secs(node.when),
+            })
+            .collect();
+        // Children come after their parent, so this keeps the newest last.
+        for index in 0..nodes.len() {
+            let parent = nodes[index].parent;
+            match parent {
+                Some(parent) if parent < index => nodes[parent].children.push(index),
+                None if index == 0 => {}
+                _ => return Err(error(format!("state {index} has a bad parent"))),
+            }
+        }
+        if nodes.is_empty() || saved.current >= nodes.len() {
+            return Err(error("the current state is missing".into()));
+        }
+        Ok(History {
+            nodes,
+            current: saved.current,
+        })
+    }
+}
+
+/// The history file: one entry per state, with times in seconds since
+/// 1970. Children are not stored; they follow from the parents.
+#[derive(Serialize, Deserialize)]
+struct SavedHistory {
+    current: usize,
+    nodes: Vec<SavedNode>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedNode {
+    parent: Option<usize>,
+    label: String,
+    when: u64,
+    params: Params,
 }
 
 #[cfg(test)]
@@ -130,6 +206,31 @@ mod tests {
         // The first branch is still there.
         history.jump(1);
         assert_eq!(*history.params(), params(1.0));
+    }
+
+    #[test]
+    fn saved_history_loads_back_the_same() {
+        let mut history = History::new(params(0.0));
+        history.record(
+            Params::from([("dot.end".to_string(), ParamValue::Vec(1.0, -2.5))]),
+            "drag dot.end",
+        );
+        history.undo();
+        history.record(params(3.0), "drag x");
+        let path = std::env::temp_dir()
+            .join(format!("anicode-history-{}", std::process::id()))
+            .join("scene.toml");
+        history.save(&path).unwrap();
+        let loaded = History::load(&path).unwrap();
+        assert_eq!(loaded.current(), history.current());
+        assert_eq!(loaded.nodes()[0].children, [1, 2]);
+        for (a, b) in loaded.nodes().iter().zip(history.nodes()) {
+            assert_eq!(
+                (&a.params, &a.label, a.parent),
+                (&b.params, &b.label, b.parent)
+            );
+        }
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]

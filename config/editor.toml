@@ -19,3 +19,8 @@ min_gain = 0.05
 # How often to check the scene, params and Shotcut project files for
 # changes, in seconds.
 poll_seconds = 0.25
+
+[history]
+# Where undo history is saved, under the project folder. Each scene gets a
+# file at the same path as the scene, like examples/drag.toml.
+folder = ".anicode/history"

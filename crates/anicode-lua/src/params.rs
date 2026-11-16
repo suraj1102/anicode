@@ -5,8 +5,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use mlua::{Lua, Table, Value};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Serializes as a number or a pair, like the params file.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum ParamValue {
     Number(f64),
     Vec(f64, f64),
