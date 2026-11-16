@@ -5,10 +5,14 @@ use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;
 
 use anicode_core::kurbo::{Affine, Point};
-use anicode_core::{Animation, Block, Color, Easing, Frame, NodeId, PropertyId, Scene, Target};
+use anicode_core::{
+    Animation, Block, Color, Easing, Frame, NodeId, ParamPart, ParamUse, PropertyId, Scene, Target,
+};
 use mlua::{
     AnyUserData, Error, Function, Lua, MetaMethod, Result, Table, UserData, UserDataMethods, Value,
 };
+
+use crate::params::{ParamValue, Params};
 
 /// Registry key of the Lua table that holds derive functions. Keeping them in
 /// Lua, not in Rust, avoids a reference cycle between Rust and the Lua state.
@@ -25,6 +29,13 @@ pub(crate) struct State {
     /// the next `play` block, which `play` then closes.
     pub pending_play: Cell<Option<PendingPlay>>,
     play_count: Cell<usize>,
+    /// Values from the scene's params file.
+    pub file_params: RefCell<Params>,
+    /// The params the scene used and their values; `ParamUse::param` indexes
+    /// this list.
+    pub used_params: RefCell<Vec<(String, ParamValue)>>,
+    /// Names nodes in messages, like "Circle on line 3". Indexed by NodeId.
+    pub node_labels: RefCell<Vec<String>>,
 }
 
 #[derive(Clone, Copy)]
@@ -103,6 +114,14 @@ pub(crate) fn register(lua: &Lua, state: &Shared) -> Result<()> {
 
     let shared = state.clone();
     globals.set(
+        "param",
+        lua.create_function(move |lua, (name, default): (String, Value)| {
+            param(lua, &shared, name, &default)
+        })?,
+    )?;
+
+    let shared = state.clone();
+    globals.set(
         "at",
         lua.create_function(move |lua, name: String| {
             if shared.current_block.get().is_some() {
@@ -158,10 +177,11 @@ pub(crate) fn register(lua: &Lua, state: &Shared) -> Result<()> {
     let shared = state.clone();
     globals.set(
         "animate",
-        lua.create_function(move |lua, (property, to): (AnyUserData, f64)| {
+        lua.create_function(move |lua, (property, to): (AnyUserData, Value)| {
             let id = property.borrow::<PropertyHandle>()?.id;
+            let (to, param) = tracked_number(lua, &to)?;
             let block = shared.animation_block(lua, "animate")?;
-            animation_handle(&shared, block, &[(id, Target::To(to))])
+            animation_handle(&shared, block, &[(id, Target::To(to), param)])
         })?,
     )?;
 
@@ -172,7 +192,7 @@ pub(crate) fn register(lua: &Lua, state: &Shared) -> Result<()> {
             let opacity = node.borrow::<NodeHandle>()?.property("opacity");
             let block = shared.animation_block(lua, "fade_in")?;
             shared.scene_mut()?.properties.set_base(opacity, 0.0);
-            animation_handle(&shared, block, &[(opacity, Target::To(1.0))])
+            animation_handle(&shared, block, &[(opacity, Target::To(1.0), None)])
         })?,
     )?;
 
@@ -182,7 +202,7 @@ pub(crate) fn register(lua: &Lua, state: &Shared) -> Result<()> {
         lua.create_function(move |lua, node: AnyUserData| {
             let opacity = node.borrow::<NodeHandle>()?.property("opacity");
             let block = shared.animation_block(lua, "fade_out")?;
-            animation_handle(&shared, block, &[(opacity, Target::To(0.0))])
+            animation_handle(&shared, block, &[(opacity, Target::To(0.0), None)])
         })?,
     )?;
 
@@ -191,16 +211,9 @@ pub(crate) fn register(lua: &Lua, state: &Shared) -> Result<()> {
         "move_to",
         lua.create_function(move |lua, (node, to): (AnyUserData, Table)| {
             let node = node.borrow::<NodeHandle>()?.clone();
-            let (x, y) = vec_xy(lua, &to)?;
+            let to = tracked_vec(lua, &to)?;
             let block = shared.animation_block(lua, "move_to")?;
-            animation_handle(
-                &shared,
-                block,
-                &[
-                    (node.property("x"), Target::To(x)),
-                    (node.property("y"), Target::To(y)),
-                ],
-            )
+            animation_handle(&shared, block, &node.xy_changes(to, Target::To))
         })?,
     )?;
 
@@ -210,36 +223,31 @@ pub(crate) fn register(lua: &Lua, state: &Shared) -> Result<()> {
         "shift",
         lua.create_function(move |lua, (node, by): (AnyUserData, Table)| {
             let node = node.borrow::<NodeHandle>()?.clone();
-            let (x, y) = vec_xy(lua, &by)?;
+            let by = tracked_vec(lua, &by)?;
             let block = shared.animation_block(lua, "shift")?;
-            animation_handle(
-                &shared,
-                block,
-                &[
-                    (node.property("x"), Target::By(x)),
-                    (node.property("y"), Target::By(y)),
-                ],
-            )
+            animation_handle(&shared, block, &node.xy_changes(by, Target::By))
         })?,
     )?;
 
     let shared = state.clone();
     globals.set(
         "scale",
-        lua.create_function(move |lua, (node, factor): (AnyUserData, f64)| {
+        lua.create_function(move |lua, (node, factor): (AnyUserData, Value)| {
             let scale = node.borrow::<NodeHandle>()?.property("scale");
+            let (factor, param) = tracked_number(lua, &factor)?;
             let block = shared.animation_block(lua, "scale")?;
-            animation_handle(&shared, block, &[(scale, Target::Times(factor))])
+            animation_handle(&shared, block, &[(scale, Target::Times(factor), param)])
         })?,
     )?;
 
     let shared = state.clone();
     globals.set(
         "rotate",
-        lua.create_function(move |lua, (node, angle): (AnyUserData, f64)| {
+        lua.create_function(move |lua, (node, angle): (AnyUserData, Value)| {
             let rotation = node.borrow::<NodeHandle>()?.property("rotation");
+            let (angle, param) = tracked_number(lua, &angle)?;
             let block = shared.animation_block(lua, "rotate")?;
-            animation_handle(&shared, block, &[(rotation, Target::By(angle))])
+            animation_handle(&shared, block, &[(rotation, Target::By(angle), param)])
         })?,
     )?;
 
@@ -345,6 +353,13 @@ fn create_node(
         }
     };
 
+    let line = lua.inspect_stack(1, |debug| debug.current_line()).flatten();
+    let label = match line {
+        Some(line) => format!("{kind} on line {line}"),
+        None => kind.to_string(),
+    };
+    state.node_labels.borrow_mut().push(label);
+
     let mut scene = state.scene_mut()?;
     let id = match kind {
         "Group" => scene.add_group(),
@@ -411,20 +426,23 @@ fn create_node(
 
     let mut bases = vec![];
     if let Some(pos) = options.get::<Option<Table>>("pos")? {
-        let (x, y) = vec_xy(lua, &pos)?;
+        let [x, y] = tracked_vec(lua, &pos)?;
         bases.extend([("x", x), ("y", y)]);
     }
     for key in ["x", "y", "scale", "rotation", "opacity", "stroke_width"] {
-        if let Value::Nil = options.get::<Value>(key)? {
+        let value = options.get::<Value>(key)?;
+        if let Value::Nil = value {
             continue;
         }
-        bases.push((key, number_or(key, 0.0)?));
+        bases.push((key, tracked_number(lua, &value)?));
     }
-    for (key, value) in bases {
+    for (key, (value, param)) in bases {
         let property = scene.nodes[id]
             .property(key)
             .expect("every node has this property");
-        scene.properties.set_base(property, value);
+        scene
+            .properties
+            .change_base(property, Target::To(value), param);
     }
     drop(scene);
 
@@ -442,11 +460,11 @@ fn create_node(
 fn change(
     state: &State,
     block: Option<usize>,
-    changes: &[(PropertyId, Target)],
+    changes: &[Change],
 ) -> Result<Vec<(PropertyId, usize)>> {
     let mut scene = state.scene_mut()?;
     let mut added = vec![];
-    for &(id, target) in changes {
+    for &(id, target, param) in changes {
         match block {
             Some(block) => {
                 let animation = Animation {
@@ -454,23 +472,21 @@ fn change(
                     duration: None,
                     target,
                     easing: Easing::InOut,
+                    param,
                 };
                 added.push((id, scene.properties.animate(id, animation)));
             }
-            None => {
-                let base = scene.properties.base(id);
-                scene.properties.set_base(id, target.apply(base));
-            }
+            None => scene.properties.change_base(id, target, param),
         }
     }
     Ok(added)
 }
 
-fn animation_handle(
-    state: &Shared,
-    block: usize,
-    changes: &[(PropertyId, Target)],
-) -> Result<AnimationHandle> {
+/// A property, the change to make to it, and the param the change's
+/// number came from.
+type Change = (PropertyId, Target, Option<ParamUse>);
+
+fn animation_handle(state: &Shared, block: usize, changes: &[Change]) -> Result<AnimationHandle> {
     Ok(AnimationHandle {
         state: state.clone(),
         parts: change(state, Some(block), changes)?,
@@ -520,10 +536,91 @@ fn number(lua: &Lua, value: &Value) -> Result<f64> {
             let property = data.borrow::<PropertyHandle>()?;
             property_value(lua, &property.state, property.id)
         }
+        Value::UserData(data) if data.is::<ParamNumber>() => {
+            Ok(data.borrow::<ParamNumber>()?.value)
+        }
         other => Err(Error::runtime(format!(
             "expected a number, got {}",
             other.type_name()
         ))),
+    }
+}
+
+/// A number and the param it came from, if it came straight from one.
+type Tracked = (f64, Option<ParamUse>);
+
+fn tracked_number(lua: &Lua, value: &Value) -> Result<Tracked> {
+    if let Value::UserData(data) = value
+        && let Ok(number) = data.borrow::<ParamNumber>()
+    {
+        let param = ParamUse {
+            param: number.param,
+            part: ParamPart::Number,
+        };
+        return Ok((number.value, Some(param)));
+    }
+    Ok((number(lua, value)?, None))
+}
+
+/// A vec from `param` carries the param's index in its `param` field. Vec
+/// arithmetic makes new vecs without it, so `param(...) + UP` is untracked.
+fn tracked_vec(lua: &Lua, vector: &Table) -> Result<[Tracked; 2]> {
+    if let Some(param) = vector.raw_get::<Option<usize>>("param")? {
+        let (x, y) = vec_xy(lua, vector)?;
+        let part = |part| Some(ParamUse { param, part });
+        return Ok([(x, part(ParamPart::X)), (y, part(ParamPart::Y))]);
+    }
+    Ok([
+        tracked_number(lua, &vector.get::<Value>("x")?)?,
+        tracked_number(lua, &vector.get::<Value>("y")?)?,
+    ])
+}
+
+/// `param("name", default)`: the value from the params file, or the default.
+fn param(lua: &Lua, state: &State, name: String, default: &Value) -> Result<Value> {
+    let default = match default {
+        Value::Table(vector) => {
+            let (x, y) = vec_xy(lua, vector)?;
+            ParamValue::Vec(x, y)
+        }
+        other => ParamValue::Number(number(lua, other)?),
+    };
+    let kind = |value: &ParamValue| match value {
+        ParamValue::Number(_) => "number",
+        ParamValue::Vec(..) => "vec",
+    };
+    let mut used = state.used_params.borrow_mut();
+    // A name used twice keeps the value it got the first time.
+    let index = match used.iter().position(|(used_name, _)| *used_name == name) {
+        Some(index) => index,
+        None => {
+            let value = match state.file_params.borrow().get(&name) {
+                Some(value) if kind(value) != kind(&default) => {
+                    return Err(Error::runtime(format!(
+                        "the params file gives {name} a {}, but its default is a {}",
+                        kind(value),
+                        kind(&default)
+                    )));
+                }
+                Some(value) => *value,
+                None => default,
+            };
+            used.push((name, value));
+            used.len() - 1
+        }
+    };
+    let value = used[index].1;
+    drop(used);
+    match value {
+        ParamValue::Number(value) => Ok(Value::UserData(lua.create_userdata(ParamNumber {
+            param: index,
+            value,
+        })?)),
+        ParamValue::Vec(x, y) => {
+            let vector: Table = lua.globals().get::<Function>("vec")?.call((x, y))?;
+            vector.raw_set("param", index)?;
+            Ok(Value::Table(vector))
+        }
     }
 }
 
@@ -563,6 +660,13 @@ impl NodeHandle {
         self.find_property(name)
             .expect("every node has transform properties")
     }
+
+    fn xy_changes(&self, [x, y]: [Tracked; 2], target: fn(f64) -> Target) -> [Change; 2] {
+        [
+            (self.property("x"), target(x.0), x.1),
+            (self.property("y"), target(y.0), y.1),
+        ]
+    }
 }
 
 impl UserData for NodeHandle {
@@ -580,48 +684,44 @@ impl UserData for NodeHandle {
 
         methods.add_function("move_to", |lua, (this, to): (AnyUserData, Table)| {
             let node = this.borrow::<NodeHandle>()?.clone();
-            let (x, y) = vec_xy(lua, &to)?;
+            let to = tracked_vec(lua, &to)?;
             change(
                 &node.state,
                 node.state.current_block.get(),
-                &[
-                    (node.property("x"), Target::To(x)),
-                    (node.property("y"), Target::To(y)),
-                ],
+                &node.xy_changes(to, Target::To),
             )?;
             Ok(this)
         });
 
         methods.add_function("shift", |lua, (this, by): (AnyUserData, Table)| {
             let node = this.borrow::<NodeHandle>()?.clone();
-            let (x, y) = vec_xy(lua, &by)?;
+            let by = tracked_vec(lua, &by)?;
             change(
                 &node.state,
                 node.state.current_block.get(),
-                &[
-                    (node.property("x"), Target::By(x)),
-                    (node.property("y"), Target::By(y)),
-                ],
+                &node.xy_changes(by, Target::By),
             )?;
             Ok(this)
         });
 
-        methods.add_function("scale", |_, (this, factor): (AnyUserData, f64)| {
+        methods.add_function("scale", |lua, (this, factor): (AnyUserData, Value)| {
             let node = this.borrow::<NodeHandle>()?.clone();
+            let (factor, param) = tracked_number(lua, &factor)?;
             change(
                 &node.state,
                 node.state.current_block.get(),
-                &[(node.property("scale"), Target::Times(factor))],
+                &[(node.property("scale"), Target::Times(factor), param)],
             )?;
             Ok(this)
         });
 
-        methods.add_function("rotate", |_, (this, angle): (AnyUserData, f64)| {
+        methods.add_function("rotate", |lua, (this, angle): (AnyUserData, Value)| {
             let node = this.borrow::<NodeHandle>()?.clone();
+            let (angle, param) = tracked_number(lua, &angle)?;
             change(
                 &node.state,
                 node.state.current_block.get(),
-                &[(node.property("rotation"), Target::By(angle))],
+                &[(node.property("rotation"), Target::By(angle), param)],
             )?;
             Ok(this)
         });
@@ -698,23 +798,45 @@ impl UserData for PropertyHandle {
         methods.add_method("get", |lua, this, ()| {
             property_value(lua, &this.state, this.id)
         });
-
-        let operators: [(MetaMethod, Operator); 4] = [
-            (MetaMethod::Add, |a, b| a + b),
-            (MetaMethod::Sub, |a, b| a - b),
-            (MetaMethod::Mul, |a, b| a * b),
-            (MetaMethod::Div, |a, b| a / b),
-        ];
-        for (method, operator) in operators {
-            methods.add_meta_function(method, move |lua, (a, b): (Value, Value)| {
-                Ok(operator(number(lua, &a)?, number(lua, &b)?))
-            });
-        }
+        add_operators(methods);
         methods.add_meta_method(MetaMethod::Unm, |lua, this, ()| {
             Ok(-property_value(lua, &this.state, this.id)?)
         });
         methods.add_meta_method(MetaMethod::ToString, |lua, this, ()| {
             Ok(property_value(lua, &this.state, this.id)?.to_string())
+        });
+    }
+}
+
+/// Arithmetic for handles that stand for a number.
+fn add_operators<T, M: UserDataMethods<T>>(methods: &mut M) {
+    let operators: [(MetaMethod, Operator); 4] = [
+        (MetaMethod::Add, |a, b| a + b),
+        (MetaMethod::Sub, |a, b| a - b),
+        (MetaMethod::Mul, |a, b| a * b),
+        (MetaMethod::Div, |a, b| a / b),
+    ];
+    for (method, operator) in operators {
+        methods.add_meta_function(method, move |lua, (a, b): (Value, Value)| {
+            Ok(operator(number(lua, &a)?, number(lua, &b)?))
+        });
+    }
+}
+
+/// A number from `param`. It works in arithmetic like a number, and it
+/// remembers its param, so the editor can find the param behind a property.
+struct ParamNumber {
+    param: usize,
+    value: f64,
+}
+
+impl UserData for ParamNumber {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("get", |_, this, ()| Ok(this.value));
+        add_operators(methods);
+        methods.add_meta_method(MetaMethod::Unm, |_, this, ()| Ok(-this.value));
+        methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
+            Ok(this.value.to_string())
         });
     }
 }

@@ -2,14 +2,17 @@
 
 mod bindings;
 mod config;
+mod params;
 
+pub use anicode_core::ParamPart;
 pub use config::{Config, load_scene};
+pub use params::{ParamValue, Params, params_path, read_params, write_params};
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use anicode_core::{DrawItem, Frame};
+use anicode_core::{Control, DrawItem, Frame, NodeId, ParamUse};
 use mlua::{Lua, Table};
 
 use bindings::State;
@@ -25,6 +28,13 @@ pub struct Settings {
     pub default_animation_seconds: f64,
 }
 
+/// The param, or one part of a vec param, that sets a node property.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParamRef {
+    pub name: String,
+    pub part: ParamPart,
+}
+
 pub struct Engine {
     lua: Lua,
     state: Rc<State>,
@@ -32,8 +42,9 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Runs the scene file. `markers` maps `at` block names to start times
-    /// in seconds. Errors read like `scene.lua:12: message`.
+    /// Runs the scene file, with the values in its params file if it has
+    /// one. `markers` maps `at` block names to start times in seconds.
+    /// Errors read like `scene.lua:12: message`.
     pub fn load(
         path: &Path,
         markers: &HashMap<String, f64>,
@@ -46,11 +57,18 @@ impl Engine {
         let absolute =
             std::path::absolute(path).map_err(|error| format!("{}: {error}", path.display()))?;
         let module_dir = absolute.parent().unwrap_or(Path::new("/"));
+        let params_file = params_path(path);
+        let params = if params_file.is_file() {
+            read_params(&params_file)?
+        } else {
+            Params::new()
+        };
         Engine::from_source(
             &source,
             &path.display().to_string(),
             module_dir,
             markers,
+            params,
             settings,
         )
     }
@@ -60,10 +78,12 @@ impl Engine {
         name: &str,
         module_dir: &Path,
         markers: &HashMap<String, f64>,
+        params: Params,
         settings: Settings,
     ) -> Result<Engine, String> {
         let lua = Lua::new();
         let state = Rc::new(State::default());
+        *state.file_params.borrow_mut() = params;
         let to_text = |error: mlua::Error| error_text(&error);
 
         bindings::register(&lua, &state).map_err(to_text)?;
@@ -109,6 +129,45 @@ impl Engine {
     /// Each `at` and `play` block's name and start time in seconds.
     pub fn block_starts(&self) -> Vec<(String, f64)> {
         self.state.scene.borrow().block_starts()
+    }
+
+    /// The params the scene used, with their values from the params file or
+    /// their defaults.
+    pub fn params(&self) -> Params {
+        self.state.used_params.borrow().iter().cloned().collect()
+    }
+
+    /// Names a node for messages, like "Circle on line 3".
+    pub fn node_label(&self, node: NodeId) -> String {
+        self.state.node_labels.borrow()[node].clone()
+    }
+
+    /// The param that sets `property` of `node` at `time`: the one behind
+    /// the animation that last started, or behind the base value. When no
+    /// param sets it, the error says what does.
+    pub fn param_for(&self, node: NodeId, property: &str, time: f64) -> Result<ParamRef, String> {
+        let scene = self.state.scene.borrow();
+        let label = self.node_label(node);
+        let id = scene.nodes[node]
+            .property(property)
+            .ok_or_else(|| format!("{label} has no {property}"))?;
+        match scene.properties.control(id, time) {
+            Control::Param(ParamUse { param, part }) => Ok(ParamRef {
+                name: self.state.used_params.borrow()[param].0.clone(),
+                part,
+            }),
+            Control::Derive => Err(format!(
+                "{label}: {property} is computed by derive, so no param sets it"
+            )),
+            Control::Code { block: None } => Err(format!(
+                "{label}: {property} is a number in the code; set it with param() to drag it"
+            )),
+            Control::Code { block: Some(block) } => Err(format!(
+                "{label}: {property} is animated in block \"{}\" to a number in the code; \
+                 use param() for the target to drag it",
+                scene.blocks[block].name
+            )),
+        }
     }
 
     /// Scene length in seconds.
@@ -174,6 +233,10 @@ mod tests {
     use super::*;
 
     fn load(source: &str) -> Result<Engine, String> {
+        load_with(source, Params::new())
+    }
+
+    fn load_with(source: &str, params: Params) -> Result<Engine, String> {
         let settings = Settings {
             frame_height: 8.0,
             default_block_seconds: 2.0,
@@ -184,6 +247,7 @@ mod tests {
             "test.lua",
             Path::new("."),
             &HashMap::new(),
+            params,
             settings,
         )
     }
@@ -369,5 +433,78 @@ mod tests {
     fn unknown_shape_options_are_rejected() {
         let error = load("Rect { widht = 2 }").err().unwrap();
         assert!(error.contains("Rect has no option widht"), "{error}");
+    }
+
+    fn center(engine: &Engine, time: f64) -> (f64, f64) {
+        let item = &engine.display_list(time, 160, 90).unwrap()[0];
+        let center = item.transform * anicode_core::kurbo::Point::ZERO;
+        // 11.25 pixels per unit, origin at (80, 45), y up.
+        ((center.x - 80.0) / 11.25, (45.0 - center.y) / 11.25)
+    }
+
+    const DOT: &str = r#"
+        local dot = Circle { pos = param("dot.start", vec(1, 0)), fill = RED }
+        play { move_to(dot, param("dot.end", vec(-1, 0))) }
+        play { shift(dot, UP) }
+        play { scale(dot, param("dot.grow", 2)) }
+    "#;
+
+    #[test]
+    fn params_use_defaults_or_the_file() {
+        let engine = load(DOT).unwrap();
+        assert_eq!(center(&engine, 0.0), (1.0, 0.0));
+        assert_eq!(center(&engine, 2.0), (-1.0, 0.0));
+        assert_eq!(engine.params()["dot.grow"], ParamValue::Number(2.0));
+
+        let file = Params::from([("dot.end".to_string(), ParamValue::Vec(3.0, 2.0))]);
+        let engine = load_with(DOT, file).unwrap();
+        assert_eq!(center(&engine, 2.0), (3.0, 2.0));
+        assert_eq!(center(&engine, 4.0), (3.0, 3.0));
+        assert_eq!(engine.params()["dot.end"], ParamValue::Vec(3.0, 2.0));
+    }
+
+    #[test]
+    fn params_file_values_must_match_the_default_kind() {
+        let file = Params::from([("dot.grow".to_string(), ParamValue::Vec(1.0, 1.0))]);
+        let error = load_with(DOT, file).err().unwrap();
+        assert!(
+            error.ends_with("gives dot.grow a vec, but its default is a number"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn param_for_finds_the_param_at_the_playhead() {
+        let engine = load(DOT).unwrap();
+        let param = |property, time| engine.param_for(0, property, time);
+        let named = |name: &str, part| {
+            Ok(ParamRef {
+                name: name.to_string(),
+                part,
+            })
+        };
+        assert_eq!(param("x", 0.0), named("dot.start", ParamPart::X));
+        assert_eq!(param("y", 1.0), named("dot.end", ParamPart::Y));
+        // shift by a number in code follows where move_to left the dot.
+        assert_eq!(param("y", 3.0), named("dot.end", ParamPart::Y));
+        assert_eq!(param("scale", 5.0), named("dot.grow", ParamPart::Number));
+        let error = param("scale", 0.0).unwrap_err();
+        assert_eq!(
+            error,
+            "Circle on line 2: scale is a number in the code; set it with param() to drag it"
+        );
+    }
+
+    #[test]
+    fn param_numbers_work_in_arithmetic() {
+        let engine = load(
+            r#"
+            local size = param("size", 0.5)
+            assert(size * 2 == 1 and 1 + size == 1.5 and -size == -0.5)
+            Circle { r = size, x = param("x", 2), fill = RED }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(center(&engine, 0.0), (2.0, 0.0));
     }
 }

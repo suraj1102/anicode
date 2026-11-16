@@ -25,6 +25,35 @@ impl Target {
     }
 }
 
+/// Where a value came from: a `param("name", default)` in the scene. `param`
+/// indexes the params the scene used, in the order it first used them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParamUse {
+    pub param: usize,
+    pub part: ParamPart,
+}
+
+/// Which part of the param the value is: all of a number param, or one
+/// coordinate of a vec param.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ParamPart {
+    Number,
+    X,
+    Y,
+}
+
+/// What sets a property's value at some time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Control {
+    Param(ParamUse),
+    Derive,
+    /// A number written in the code: the base value (`block` is `None`) or
+    /// the target of an animation in that block.
+    Code {
+        block: Option<usize>,
+    },
+}
+
 /// An animation as written in the scene. Its times are known only after all
 /// blocks are declared, so it refers to its block by index.
 #[derive(Clone, Copy, Debug)]
@@ -34,10 +63,14 @@ pub struct Animation {
     pub duration: Option<f64>,
     pub target: Target,
     pub easing: Easing,
+    /// The param the target value came from, if any.
+    pub param: Option<ParamUse>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct TimedAnimation {
+    /// Index of the animation this was made from.
+    source: usize,
     start: f64,
     duration: f64,
     from: f64,
@@ -59,6 +92,7 @@ impl TimedAnimation {
 #[derive(Debug, Default)]
 struct Property {
     base: f64,
+    base_param: Option<ParamUse>,
     derive: Option<DeriveId>,
     animations: Vec<Animation>,
     timed: Vec<TimedAnimation>,
@@ -94,6 +128,19 @@ impl Properties {
 
     pub fn set_base(&mut self, id: PropertyId, value: f64) {
         self.list[id].base = value;
+        self.list[id].base_param = None;
+    }
+
+    /// Changes the base value and keeps track of the param it came from.
+    /// After a relative change by a number in code, the result still follows
+    /// the earlier param, so dragging that param moves it the same way.
+    pub fn change_base(&mut self, id: PropertyId, target: Target, param: Option<ParamUse>) {
+        let property = &mut self.list[id];
+        property.base = target.apply(property.base);
+        property.base_param = match target {
+            Target::To(_) => param,
+            Target::By(_) | Target::Times(_) => property.base_param.or(param),
+        };
     }
 
     pub fn derive(&self, id: PropertyId) -> Option<DeriveId> {
@@ -128,15 +175,19 @@ impl Properties {
     /// starts from the value the property has when it begins.
     pub fn resolve(&mut self, blocks: &[BlockTime], default_duration: f64) {
         for property in &mut self.list {
-            let mut animations = property.animations.clone();
-            animations.sort_by(|a, b| blocks[a.block].start.total_cmp(&blocks[b.block].start));
+            let mut order: Vec<usize> = (0..property.animations.len()).collect();
+            order.sort_by(|&a, &b| {
+                let start = |index: usize| blocks[property.animations[index].block].start;
+                start(a).total_cmp(&start(b))
+            });
 
             property.timed.clear();
-            for animation in animations {
-                let block = blocks[animation.block];
-                let start = block.start;
+            for source in order {
+                let animation = property.animations[source];
+                let start = blocks[animation.block].start;
                 let from = value_at(property.base, &property.timed, start);
                 property.timed.push(TimedAnimation {
+                    source,
                     start,
                     duration: animation.duration.unwrap_or(default_duration),
                     from,
@@ -164,6 +215,38 @@ impl Properties {
             .flat_map(|property| &property.timed)
             .map(|animation| animation.start + animation.duration)
             .fold(0.0, f64::max)
+    }
+
+    /// What sets the value at `time`: the animation that last started, or the
+    /// base value before any has. At its start time an animation still shows
+    /// its start value, so it counts only after that. An animation by a relative number in code
+    /// (`shift(dot, RIGHT)`) follows its start value, so the search goes on
+    /// to what set that.
+    pub fn control(&self, id: PropertyId, time: f64) -> Control {
+        let property = &self.list[id];
+        if property.derive.is_some() {
+            return Control::Derive;
+        }
+        let started = property
+            .timed
+            .iter()
+            .filter(|animation| time > animation.start)
+            .count();
+        for timed in property.timed[..started].iter().rev() {
+            let animation = property.animations[timed.source];
+            match (animation.param, animation.target) {
+                (Some(param), _) => return Control::Param(param),
+                (None, Target::By(_) | Target::Times(_)) => continue,
+                (None, Target::To(_)) => {
+                    return Control::Code {
+                        block: Some(animation.block),
+                    };
+                }
+            }
+        }
+        property
+            .base_param
+            .map_or(Control::Code { block: None }, Control::Param)
     }
 
     /// The animated value at `time`. Ignores derive; the caller handles that.
@@ -235,6 +318,7 @@ mod tests {
             duration: None,
             target,
             easing: Easing::Linear,
+            param: None,
         }
     }
 
@@ -296,6 +380,48 @@ mod tests {
         assert_eq!(properties.value_at(x, 3.5), 0.5);
         assert_eq!(properties.value_at(y, 3.5), 0.5);
         assert_eq!(properties.last_animation_end(), 4.0);
+    }
+
+    fn param(param: usize, part: ParamPart) -> ParamUse {
+        ParamUse { param, part }
+    }
+
+    #[test]
+    fn control_finds_the_param_of_the_animation_at_the_time() {
+        let mut properties = Properties::default();
+        let x = properties.add(0.0);
+        properties.change_base(x, Target::To(1.0), Some(param(0, ParamPart::X)));
+        let mut moved = animation(1, Target::To(3.0));
+        moved.param = Some(param(1, ParamPart::Number));
+        properties.animate(x, moved);
+        properties.resolve(&BLOCKS, 1.0);
+        assert_eq!(
+            properties.control(x, 1.0),
+            Control::Param(param(0, ParamPart::X))
+        );
+        assert_eq!(
+            properties.control(x, 3.0),
+            Control::Param(param(1, ParamPart::Number))
+        );
+    }
+
+    #[test]
+    fn relative_animations_in_code_follow_their_start_value() {
+        let mut properties = Properties::default();
+        let x = properties.add(0.0);
+        properties.change_base(x, Target::To(1.0), Some(param(0, ParamPart::X)));
+        properties.change_base(x, Target::By(2.0), None);
+        properties.animate(x, animation(0, Target::By(1.0)));
+        properties.animate(x, animation(1, Target::To(5.0)));
+        properties.resolve(&BLOCKS, 1.0);
+        assert_eq!(properties.base(x), 3.0);
+        assert_eq!(
+            properties.control(x, 1.0),
+            Control::Param(param(0, ParamPart::X))
+        );
+        assert_eq!(properties.control(x, 2.5), Control::Code { block: Some(1) });
+        properties.set_base(x, 0.0);
+        assert_eq!(properties.control(x, 1.0), Control::Code { block: None });
     }
 
     #[test]
