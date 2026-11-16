@@ -72,20 +72,41 @@ pub fn write_params(path: &Path, params: &Params) -> Result<(), String> {
 /// Sets these params in the file and keeps the rest of it as written,
 /// comments included. Writes a new file if there is none.
 pub fn set_params(path: &Path, changes: &Params) -> Result<(), String> {
+    let mut params = if path.is_file() {
+        read_params(path)?
+    } else {
+        Params::new()
+    };
+    params.extend(changes.iter().map(|(name, value)| (name.clone(), *value)));
+    save_params(path, &params)
+}
+
+/// Makes the file hold exactly `params`: changes and adds lines, and removes
+/// the lines of params that are not in `params`. Other lines, comments
+/// included, stay as written. Writes a new file if there is none.
+pub fn save_params(path: &Path, params: &Params) -> Result<(), String> {
     if !path.is_file() {
-        return write_params(path, changes);
+        return write_params(path, params);
     }
     let text =
         std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let name = path.display().to_string();
-    let mut expected = parse_params(&text, &name)?;
-    expected.extend(changes.iter().map(|(name, value)| (name.clone(), *value)));
+    let old = parse_params(&text, &name)?;
+    let changes: Params = params
+        .iter()
+        .filter(|&(name, value)| old.get(name) != Some(value))
+        .map(|(name, value)| (name.clone(), *value))
+        .collect();
+    let removed: Vec<&String> = old
+        .keys()
+        .filter(|name| !params.contains_key(*name))
+        .collect();
     // The edit finds one param per line. For a file laid out another way,
     // the edit reads back wrong, and the file is written fresh instead.
-    let edited = edit_params_text(&text, changes);
+    let edited = edit_params_text(&text, &changes, &removed);
     match parse_params(&edited, &name) {
-        Ok(params) if params == expected => write(path, &edited),
-        _ => write_params(path, &expected),
+        Ok(read) if read == *params => write(path, &edited),
+        _ => write_params(path, params),
     }
 }
 
@@ -104,10 +125,11 @@ fn value_text(value: ParamValue) -> String {
     }
 }
 
-/// Replaces the value on each changed param's line, and adds params the
-/// file does not have before its closing brace.
-fn edit_params_text(text: &str, changes: &Params) -> String {
+/// Replaces the value on each changed param's line, adds params the file
+/// does not have before its closing brace, and drops removed params' lines.
+fn edit_params_text(text: &str, changes: &Params, removed: &[&String]) -> String {
     let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    lines.retain(|line| !removed.iter().any(|name| value_start(line, name).is_some()));
     for (name, value) in changes {
         let found = lines
             .iter()
@@ -227,6 +249,20 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "-- Timing for the intro.\nreturn {\n  size = 0.8, -- big\n  [\"dot.end\"] = { 3, -1.5 }, -- keep\n  [\"new\"] = 2,\n}\n"
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn saving_params_removes_the_ones_left_out() {
+        let path = temp_file("remove.params.lua");
+        let text = "return {\n  -- how big\n  size = 0.80,\n  wait = 2,\n}\n";
+        std::fs::write(&path, text).unwrap();
+        let params = Params::from([("size".to_string(), ParamValue::Number(0.8))]);
+        save_params(&path, &params).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "return {\n  -- how big\n  size = 0.80,\n}\n"
         );
         std::fs::remove_file(&path).unwrap();
     }
