@@ -96,6 +96,11 @@ The editor is a preview window for one scene:
 cargo run --release -p anicode-editor -- examples/drag.lua
 ```
 
+It opens tall, to sit beside your text editor on half of the screen. In a
+window taller than it is wide, the inspector goes under the preview; drag
+its top edge to give the preview more room. In a wider window it moves to
+the right.
+
 - **Play and scrub.** Play or Space plays from the playhead. Click or drag
   in the bar under the preview to scrub. Each tick on the bar is the start
   of an `at` or `play` block, with its name. If a saved Shotcut project uses
@@ -145,6 +150,8 @@ All in `config/editor.toml`.
 
 | Key | Meaning |
 | --- | --- |
+| `window.width`, `window.height` | window size when the editor opens, in points |
+| `window.inspector_share` | share of a tall window's height the inspector takes at first |
 | `preview.scale` | preview size as a fraction of `render.width` and `render.height` |
 | `drag.step` | dragged values are rounded to this, in scene units or radians |
 | `drag.hit_slop` | preview pixels around a thin line that still count as clicking it |
