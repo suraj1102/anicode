@@ -4,6 +4,7 @@
 
 mod drag;
 mod history;
+mod inspector;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -33,6 +34,13 @@ struct EditorConfig {
     drag: DragConfig,
     watch: WatchConfig,
     history: HistoryConfig,
+    inspector: InspectorConfig,
+}
+
+#[derive(Deserialize)]
+struct InspectorConfig {
+    speed: f64,
+    open_command: String,
 }
 
 #[derive(Deserialize)]
@@ -229,6 +237,14 @@ impl Editor {
         match load(&self.scene, self.project.as_deref()) {
             Ok(loaded) => {
                 self.time = self.time.min(loaded.engine.duration());
+                // Node ids follow the order the script makes nodes in, so an
+                // edit to the scene can leave the selection pointing nowhere.
+                if self
+                    .selected
+                    .is_some_and(|node| node >= loaded.engine.node_count())
+                {
+                    self.selected = None;
+                }
                 self.loaded = Some(loaded);
                 self.error = None;
             }
@@ -518,7 +534,7 @@ impl eframe::App for Editor {
         }
 
         egui::Panel::bottom("controls").show(ui, |ui| self.controls(ui));
-        egui::Panel::right("history").show(ui, |ui| self.history_panel(ui));
+        egui::Panel::right("inspector").show(ui, |ui| self.inspector(ui));
         egui::CentralPanel::default().show(ui, |ui| self.preview(ui));
 
         if self.playing {
@@ -540,39 +556,6 @@ fn load(scene: &Path, project: Option<&Path>) -> Result<Loaded, String> {
     Ok(Loaded { engine, config })
 }
 
-impl Editor {
-    fn history_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("History");
-        let mut jump = None;
-        egui::ScrollArea::vertical().show(ui, |ui| self.history_rows(ui, 0, 0, &mut jump));
-        if let Some(node) = jump {
-            self.history.jump(node);
-            self.message = format!("Went to {}.", self.history.nodes()[node].label);
-            self.restore();
-        }
-    }
-
-    /// One row per state, oldest first. Rows are indented only where the
-    /// tree branches, so a history without branches stays flat.
-    fn history_rows(&self, ui: &mut egui::Ui, node: usize, depth: usize, jump: &mut Option<usize>) {
-        let entry = &self.history.nodes()[node];
-        ui.horizontal(|ui| {
-            ui.add_space(depth as f32 * 12.0);
-            let text = format!("{} ({})", entry.label, time_ago(entry.when));
-            if ui
-                .selectable_label(node == self.history.current(), text)
-                .clicked()
-            {
-                *jump = Some(node);
-            }
-        });
-        let branches = entry.children.len() > 1;
-        for &child in &entry.children {
-            self.history_rows(ui, child, depth + usize::from(branches), jump);
-        }
-    }
-}
-
 /// `examples/drag.lua` keeps its history in
 /// `<root>/<folder>/examples/drag.toml`.
 fn history_file(root: &Path, folder: &Path, scene: &Path) -> PathBuf {
@@ -582,15 +565,6 @@ fn history_file(root: &Path, folder: &Path, scene: &Path) -> PathBuf {
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| PathBuf::from(scene.file_name().unwrap_or_default()));
     root.join(folder).join(relative).with_extension("toml")
-}
-
-fn time_ago(when: SystemTime) -> String {
-    let seconds = when.elapsed().map_or(0, |elapsed| elapsed.as_secs());
-    match seconds {
-        0..60 => format!("{seconds} s ago"),
-        60..3600 => format!("{} min ago", seconds / 60),
-        _ => format!("{} h ago", seconds / 3600),
-    }
 }
 
 fn show_value(value: ParamValue) -> String {
@@ -694,6 +668,10 @@ mod tests {
             history: HistoryConfig {
                 folder: PathBuf::from(".anicode/history"),
             },
+            inspector: InspectorConfig {
+                speed: 0.01,
+                open_command: String::new(),
+            },
         };
         let scene = scene.to_path_buf();
         let mut harness = Harness::builder()
@@ -791,6 +769,38 @@ mod tests {
         let history = &harness.state().history;
         assert_eq!(history.nodes().len(), 2);
         assert_eq!(history.nodes()[1].label, "edited outside the editor");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn clicking_a_shape_shows_the_params_behind_it() {
+        let root = project(
+            "select",
+            "Circle { r = 0.5, pos = param(\"dot.pos\", vec(0, 0)), fill = RED }\n",
+        );
+        let mut harness = open(&root.join("scene.lua"));
+        let center = screen_point(&harness, 0.0, 0.0);
+        harness.drag_at(center);
+        harness.run_steps(1);
+        harness.drop_at(center);
+        harness.run_steps(2);
+        assert_eq!(harness.state().selected, Some(0));
+        assert!(harness.query_by_label("dot.pos.x").is_some());
+        assert!(harness.query_by_label("dot.pos.y").is_some());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn reset_removes_a_param_from_the_file() {
+        let root = project("reset", "Circle { r = param(\"size\", 1), fill = RED }\n");
+        let params_file = root.join("scene.params.lua");
+        std::fs::write(&params_file, "return {\n  size = 2, -- kept comment\n}\n").unwrap();
+        let mut harness = open(&root.join("scene.lua"));
+        harness.get_by_label("reset").click();
+        harness.run_steps(2);
+        assert!(anicode_lua::read_params(&params_file).unwrap().is_empty());
+        let history = &harness.state().history;
+        assert_eq!(history.nodes()[history.current()].label, "reset size");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

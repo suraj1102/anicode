@@ -143,6 +143,10 @@ impl Engine {
         self.state.used_params.borrow().iter().cloned().collect()
     }
 
+    pub fn node_count(&self) -> usize {
+        self.state.scene.borrow().nodes.len()
+    }
+
     /// Names a node for messages, like "Circle on line 3".
     pub fn node_label(&self, node: NodeId) -> String {
         self.state.node_labels.borrow()[node].clone()

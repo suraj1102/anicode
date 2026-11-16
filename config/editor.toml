@@ -24,3 +24,12 @@ poll_seconds = 0.25
 # Where undo history is saved, under the project folder. Each scene gets a
 # file at the same path as the scene, like examples/drag.toml.
 folder = ".anicode/history"
+
+[inspector]
+# How much a param field changes per pixel when you drag it.
+speed = 0.01
+# The command that opens a scene file at a line, for the "Open in editor"
+# button. {file} and {line} are filled in. Empty hides the button. For
+# example: "code -g {file}:{line}", "zed {file}:{line}" or
+# "nvim +{line} {file}" (nvim needs a terminal, so wrap it in one).
+open_command = ""

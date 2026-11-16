@@ -158,7 +158,7 @@ fn changed(value: ParamValue, part: ParamPart, change: impl Fn(f64) -> f64) -> P
     }
 }
 
-fn rounded(value: ParamValue, step: f64) -> ParamValue {
+pub fn rounded(value: ParamValue, step: f64) -> ParamValue {
     // Dividing by a whole number of steps keeps 1.234 from printing as
     // 1.2340000000000002.
     let steps = 1.0 / step;
