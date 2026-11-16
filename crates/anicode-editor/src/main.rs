@@ -263,6 +263,7 @@ impl Editor {
 
     fn preview(&mut self, ui: &mut egui::Ui) {
         let (area, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, "preview"));
         let Some(texture) = &self.texture else {
             return;
         };
@@ -492,4 +493,94 @@ fn timeline(ui: &mut egui::Ui, time: f64, duration: f64, blocks: &[(String, f64)
     let pointer = response.interact_pointer_pos()?;
     let fraction = ((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
     Some(f64::from(fraction) * duration)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    /// A project folder with the repository's config and one scene.
+    fn project(name: &str, scene: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("anicode-editor-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        std::fs::copy(
+            repo.join("config/anicode.toml"),
+            root.join("config/anicode.toml"),
+        )
+        .unwrap();
+        std::fs::write(root.join("scene.lua"), scene).unwrap();
+        root
+    }
+
+    fn open(scene: &Path) -> Harness<'static, Editor> {
+        let settings = EditorConfig {
+            preview: PreviewConfig { scale: 0.25 },
+            drag: DragConfig {
+                step: 0.001,
+                hit_slop: 4.0,
+                min_gain: 0.05,
+            },
+            // Check the files on every frame.
+            watch: WatchConfig { poll_seconds: 0.0 },
+        };
+        let scene = scene.to_path_buf();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_eframe(|_| Editor::new(scene, settings));
+        harness.run_steps(2);
+        harness
+    }
+
+    /// Where a scene point is drawn, for a frame 8 units tall.
+    fn screen_point(harness: &Harness<'static, Editor>, x: f64, y: f64) -> Pos2 {
+        let area = harness.get_by_label("preview").rect();
+        let image = fit(area, 16.0 / 9.0);
+        let points_per_unit = f64::from(image.height()) / 8.0;
+        image.center() + egui::vec2((x * points_per_unit) as f32, (-y * points_per_unit) as f32)
+    }
+
+    #[test]
+    fn dragging_a_shape_writes_its_param() {
+        let root = project(
+            "drag",
+            "Circle { r = 0.5, pos = param(\"dot.pos\", vec(0, 0)), fill = RED }\n",
+        );
+        let mut harness = open(&root.join("scene.lua"));
+        let start = screen_point(&harness, 0.0, 0.0);
+        let end = screen_point(&harness, 1.0, 0.5);
+        harness.drag_at(start);
+        harness.run_steps(1);
+        harness.hover_at(end);
+        harness.run_steps(1);
+        harness.drop_at(end);
+        harness.run_steps(1);
+
+        let params = anicode_lua::read_params(&root.join("scene.params.lua")).unwrap();
+        let ParamValue::Vec(x, y) = params["dot.pos"] else {
+            panic!("dot.pos is not a vec");
+        };
+        // One screen point is about 0.02 units here.
+        assert!((x - 1.0).abs() < 0.03 && (y - 0.5).abs() < 0.03, "{x} {y}");
+        assert!(harness.state().message.starts_with("Wrote dot.pos"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn script_errors_show_and_keep_the_last_frame() {
+        let root = project("error", "Circle { fill = RED }\n");
+        let scene = root.join("scene.lua");
+        let mut harness = open(&scene);
+        std::fs::write(&scene, "Circle { fill = RED }\nlocal broken = nil + 1\n").unwrap();
+        harness.run_steps(2);
+
+        let error = harness.state().error.clone().unwrap_or_default();
+        assert!(error.contains("scene.lua:2:"), "{error}");
+        assert!(harness.query_by_label_contains("scene.lua:2:").is_some());
+        assert_eq!(harness.state().items.len(), 1);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
