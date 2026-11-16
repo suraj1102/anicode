@@ -279,6 +279,31 @@ mod tests {
     }
 
     #[test]
+    fn followers_drag_by_their_offset() {
+        let engine = load(
+            r#"
+            local dot = Circle { r = 0.2, fill = RED }
+            local tag = Circle { r = 0.2, fill = RED }
+            tag:follow(dot, param("tag.offset", vec(0, 1)))
+            play { move_to(dot, vec(2, 0)):ease("linear") }
+            "#,
+        );
+        // Half way through the move the tag is at (1, 1).
+        let drag = Drag::start(
+            &engine,
+            1,
+            Mode::Move,
+            pixel(1.0, 1.0),
+            0.5,
+            (WIDTH, HEIGHT),
+            MIN_GAIN,
+        )
+        .unwrap();
+        let file = drag.params_at(pixel(1.5, 2.0), 0.001);
+        assert_eq!(file["tag.offset"], ParamValue::Vec(0.5, 2.0));
+    }
+
+    #[test]
     fn scaling_multiplies_the_factor() {
         let engine = load(SCENE);
         let drag = drag(&engine, Mode::Scale, 3.5, pixel(2.0, 2.0)).unwrap();

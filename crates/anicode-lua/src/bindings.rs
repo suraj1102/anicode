@@ -267,6 +267,18 @@ pub(crate) fn register(lua: &Lua, state: &Shared) -> Result<()> {
 
 /// Reads a property at the current frame's time, running its derive function
 /// if it has one. Outside a frame it returns the value set by the scene code.
+/// Runs a derived property's function at the current frame and returns the
+/// param its result still carries, so the editor can drag a follower by
+/// the offset param inside its derive.
+pub(crate) fn derived_param(lua: &Lua, state: &State, id: PropertyId) -> Result<Option<ParamUse>> {
+    let Some(derive) = state.scene.borrow().properties.derive(id) else {
+        return Ok(None);
+    };
+    let derives: Table = lua.named_registry_value(DERIVES)?;
+    let function: Function = derives.raw_get(derive + 1)?;
+    Ok(tracked_number(lua, &function.call::<Value>(())?)?.1)
+}
+
 pub(crate) fn property_value(lua: &Lua, state: &State, id: PropertyId) -> Result<f64> {
     let derive = {
         let scene = state.scene.borrow();
@@ -832,7 +844,11 @@ impl UserData for NodeHandle {
                     };
                     return Ok(Value::UserData(lua.create_userdata(handle)?));
                 }
-                this.user_value::<Table>()?.raw_get::<Value>(key)
+                match this.user_value::<Table>()?.raw_get::<Value>(key.clone())? {
+                    // Methods written in Lua, like `follow` in the prelude.
+                    Value::Nil => lua.globals().get::<Table>("Node")?.raw_get(key),
+                    value => Ok(value),
+                }
             },
         );
 
@@ -874,8 +890,6 @@ fn assign(state: &State, id: PropertyId, value: Value) -> Result<()> {
     Ok(())
 }
 
-type Operator = fn(f64, f64) -> f64;
-
 #[derive(Clone)]
 struct PropertyHandle {
     state: Shared,
@@ -887,7 +901,7 @@ impl UserData for PropertyHandle {
         methods.add_method("get", |lua, this, ()| {
             property_value(lua, &this.state, this.id)
         });
-        add_operators(methods);
+        add_arithmetic(methods);
         methods.add_meta_method(MetaMethod::Unm, |lua, this, ()| {
             Ok(-property_value(lua, &this.state, this.id)?)
         });
@@ -897,17 +911,17 @@ impl UserData for PropertyHandle {
     }
 }
 
-/// Arithmetic for handles that stand for a number.
-fn add_operators<T, M: UserDataMethods<T>>(methods: &mut M) {
-    let operators: [(MetaMethod, Operator); 4] = [
-        (MetaMethod::Add, |a, b| a + b),
-        (MetaMethod::Sub, |a, b| a - b),
-        (MetaMethod::Mul, |a, b| a * b),
-        (MetaMethod::Div, |a, b| a / b),
-    ];
-    for (method, operator) in operators {
+/// `+`, `-`, `*` and `/` for handles that stand for a number. The result is
+/// a plain number unless a param is part of it.
+fn add_arithmetic<T, M: UserDataMethods<T>>(methods: &mut M) {
+    for method in [
+        MetaMethod::Add,
+        MetaMethod::Sub,
+        MetaMethod::Mul,
+        MetaMethod::Div,
+    ] {
         methods.add_meta_function(method, move |lua, (a, b): (Value, Value)| {
-            Ok(operator(number(lua, &a)?, number(lua, &b)?))
+            tracked_arithmetic(lua, method, &a, &b)
         });
     }
 }
@@ -924,16 +938,7 @@ struct ParamNumber {
 impl UserData for ParamNumber {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("get", |_, this, ()| Ok(this.value));
-        for method in [
-            MetaMethod::Add,
-            MetaMethod::Sub,
-            MetaMethod::Mul,
-            MetaMethod::Div,
-        ] {
-            methods.add_meta_function(method, move |lua, (a, b): (Value, Value)| {
-                tracked_arithmetic(lua, method, &a, &b)
-            });
-        }
+        add_arithmetic(methods);
         methods.add_meta_method(MetaMethod::Unm, |lua, this, ()| {
             tracked_value(lua, (-this.value, Some(this.param.scaled(-1.0))))
         });

@@ -171,12 +171,25 @@ impl Engine {
     /// the animation that last started, or behind the base value. When no
     /// param sets it, the error says what does.
     pub fn param_for(&self, node: NodeId, property: &str, time: f64) -> Result<ParamRef, String> {
-        let scene = self.state.scene.borrow();
         let label = self.node_label(node);
-        let id = scene.nodes[node]
-            .property(property)
-            .ok_or_else(|| format!("{label} has no {property}"))?;
-        match scene.properties.control(id, time) {
+        let (id, control) = {
+            let scene = self.state.scene.borrow();
+            let id = scene.nodes[node]
+                .property(property)
+                .ok_or_else(|| format!("{label} has no {property}"))?;
+            (id, scene.properties.control(id, time))
+        };
+        // A derive such as follow's can still carry a param in its result.
+        let control = match control {
+            Control::Derive => self
+                .at_time(time, |_, _| {
+                    bindings::derived_param(&self.lua, &self.state, id)
+                })?
+                .map_or(Control::Derive, Control::Param),
+            other => other,
+        };
+        let scene = self.state.scene.borrow();
+        match control {
             Control::Param(ParamUse {
                 via: Some(other), ..
             }) => {
@@ -194,7 +207,8 @@ impl Engine {
                 gain,
             }),
             Control::Derive => Err(format!(
-                "{label}: {property} is computed by derive, so no param sets it"
+                "{label}: {property} is computed by derive with no param in it; to drag \
+                 it, give the derive a param, like box:follow(dot, param(\"offset\", vec(0, 1)))"
             )),
             Control::Code { block: None } => Err(format!(
                 "{label}: {property} is a number in the code; set it with param() to drag it"
@@ -609,6 +623,38 @@ mod tests {
         assert_eq!(engine.node_place(0), Some((PathBuf::from("test.lua"), 2)));
         assert_eq!(engine.property_value(0, "y", 0.5), Ok(0.0));
         assert_eq!(engine.property_value(0, "x", 2.0), Ok(-1.0));
+    }
+
+    #[test]
+    fn followers_keep_their_offset_and_drag_by_it() {
+        let engine = load(
+            r#"
+            local dot = Circle { r = 0.2, fill = RED }
+            local tag = Circle { r = 0.2, fill = RED }
+            local plain = Circle { r = 0.2, fill = RED }
+            tag:follow(dot, param("tag.offset", vec(0, 1)))
+            plain:follow(dot)
+            play { move_to(dot, vec(2, 0)):ease("linear") }
+            "#,
+        )
+        .unwrap();
+        let center = |time| {
+            let item = &engine.display_list(time, 160, 90).unwrap()[1];
+            let point = item.transform * anicode_core::kurbo::Point::ZERO;
+            ((point.x - 80.0) / 11.25, (45.0 - point.y) / 11.25)
+        };
+        assert_eq!(center(0.5), (1.0, 1.0));
+        assert_eq!(center(1.0), (2.0, 1.0));
+        let offset = engine.param_for(1, "y", 0.5).unwrap();
+        assert_eq!(
+            (&*offset.name, offset.part, offset.gain),
+            ("tag.offset", ParamPart::Y, 1.0)
+        );
+        let error = engine.param_for(2, "x", 0.5).unwrap_err();
+        assert!(
+            error.contains("computed by derive with no param in it"),
+            "{error}"
+        );
     }
 
     #[test]

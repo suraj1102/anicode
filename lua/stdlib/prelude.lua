@@ -41,3 +41,17 @@ YELLOW = rgb("#ffe352")
 GREEN = rgb("#83c167")
 BLUE = rgb("#58c4dd")
 PURPLE = rgb("#9a72ac")
+
+-- Methods written in Lua that every shape has. A component library can add
+-- its own: function Node.glow(self, ...) end, then box:glow(...).
+Node = {}
+
+-- Keeps this shape at `offset` (default vec(0, 0)) from `leader` on every
+-- frame, as the leader moves. Both should be in the same group. With a
+-- param for the offset, the editor drags the follower by changing it.
+function Node.follow(self, leader, offset)
+  offset = offset or ORIGIN
+  self.x = derive(function() return leader.x + offset.x end)
+  self.y = derive(function() return leader.y + offset.y end)
+  return self
+end
