@@ -33,7 +33,7 @@ Logic that can be a plain function (history, drag math, param formatting) stays 
 
 ## Phase 0: Fix the prototype's rough edges
 
-Small fixes found while building the prototype. Each one is its own commit.
+Done (Nov 16, 2026). Small fixes found while building the prototype. Each one is its own commit.
 
 - **Drag lag during an animation.** Changing a target moves the shape by the eased progress, not the full amount, so the shape trails the cursor. Divide the change by the progress when it is above a small limit (set in `config/editor.toml`). Below that limit, refuse with a message ("scrub later in the move to drag its end").
 - **`pos` with `x` or `y`.** `Math { pos = ..., y = -2 }` sets y twice today, and the second one wins without a word. Reject it in `create_node` ("Math has both pos and y; use one").
