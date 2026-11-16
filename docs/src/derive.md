@@ -25,11 +25,16 @@ A derive can also read other shapes:
 
 <video class="preview" src="media/follow.mp4" autoplay loop muted playsinline></video>
 
+For the common case of keeping one shape at a fixed offset from another,
+`shape:follow(leader, offset)` writes these two derives for you. See
+[Placing shapes from other shapes](params.md#placing-shapes-from-other-shapes).
+
 ## Reading numbers
 
 A Value or a property (`level`, `box.x`) works in `+`, `-`, `*`, `/` and
-unary `-`, and the result is a plain number. Everything else needs the plain
-number, which `:get()` returns:
+unary `-`, and the result is a plain number (unless a `param` is part of it,
+see [Params](params.md#doing-math-with-params)). Everything else needs the
+plain number, which `:get()` returns:
 
 ```lua
 level * 0.5             -- works

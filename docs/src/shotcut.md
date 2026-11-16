@@ -101,8 +101,8 @@ block with the same name.
 
 ## 5. Edit and see the change
 
-Save the `.lua` file or the Shotcut project, then step one frame or scrub.
-The clip reloads. Shotcut does not redraw while paused, so the change only
+Save the `.lua` file, its [params file](params.md#the-params-file) or the
+Shotcut project, then step one frame or scrub. The clip reloads. Shotcut does not redraw while paused, so the change only
 shows once the playhead moves.
 
 If the scene has a mistake, the clip keeps showing the last working version
@@ -114,5 +114,5 @@ it.
 The clip starts out as long as the scene. You can drag its end out to make
 it longer, and the last frame holds.
 
-`examples/edit.mlt` is a small Shotcut project with markers, for trying the
-marker workflow.
+To try a change without Shotcut, open the scene in the
+[editor](params.md#the-editor), which plays it with the same markers.

@@ -33,3 +33,20 @@ at "turn" { animate(gain.value, 1) }
 
 The [gallery](gallery.md) has two scenes that use components from
 `examples/lib`: `basics.lua` and `mixer.lua`.
+
+## Methods for every shape
+
+The global table `Node` holds methods, written in Lua, that every shape
+has. `follow` is one of them. A component library can add its own:
+
+```lua
+function Node.fade_to(self, opacity)
+  self.opacity = opacity
+  return self
+end
+
+box:fade_to(0.5)
+```
+
+A field stored on a shape, like `self.body`, is found before a `Node`
+method of the same name.

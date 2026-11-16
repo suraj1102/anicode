@@ -34,10 +34,13 @@ Set a property by assignment (`box.x = 2`), compute it with
 | Function | Where | What it does |
 | --- | --- | --- |
 | `at "name" { ... }` | top level | a block of animations that starts at marker `name` |
+| `play { ... }` | top level | an unnamed block that starts when the one before it ends |
 | `animate(property, to)` | in a block | tweens a property or Value |
 | `fade_in(shape)` | in a block | opacity 0 to 1; hidden before the block |
 | `fade_out(shape)` | in a block | opacity to 0 |
 | `move_to(shape, vec)` | in a block | moves to a point |
+| `shift(shape, vec)`, `scale(shape, factor)`, `rotate(shape, angle)` | in a block | animate a move, a scale or a turn |
+| `param("name", default)` | anywhere | a number or `vec` that the [params file](params.md) can set |
 | `Value(start)` | anywhere | a number to animate and read |
 | `derive(function)` | anywhere | a property computed every frame |
 | `vec(x, y)` | anywhere | a 2D vector |
@@ -61,6 +64,7 @@ Set a property by assignment (`box.x = 2`), compute it with
 | `shape:rotate(angle)` | adds to the angle | animates it |
 | `shape:add(child)` | puts `child` in the group; returns it | same |
 | `shape:pos()` | returns the position as a `vec` | same |
+| `shape:follow(leader, offset)` | keeps the shape at `offset` from `leader` every frame | same |
 
 ## Constants
 
@@ -83,7 +87,9 @@ All in `config/anicode.toml`.
 | `timing.default_animation_seconds` | length of an animation without `:over` |
 | `golden.*` | settings for the golden-frame test |
 
-In Shotcut, the frame size and rate come from the Shotcut project.
+In Shotcut, the frame size and rate come from the Shotcut project. The
+editor's settings are in `config/editor.toml`; see
+[Editor settings](params.md#editor-settings).
 
 ## Known limits
 
@@ -94,8 +100,10 @@ In Shotcut, the frame size and rate come from the Shotcut project.
 - The points of a `Line` or `Path` cannot be animated.
 - Methods like `shift` take no `:over` or `:ease`. Use `move_to` or
   `animate` for that.
+- A number made from a `param` is not a plain Lua number. Compare it with
+  `:get()`: `p:get() > 1`, not `p > 1`.
 
 ## Not available yet
 
-`Text`, `Code`, `SVG`, `Image`, `Polygon`, `Arrow`, `param`, `write`, `morph`,
+`Text`, `Code`, `SVG`, `Image`, `Polygon`, `Arrow`, `write`, `morph`,
 layout helpers like `next_to`, and the built-ins `Boids`, `FFT` and `Plot`.

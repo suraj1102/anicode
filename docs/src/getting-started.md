@@ -81,6 +81,15 @@ writes no frames:
 error: scenes/hello.lua:4: fade_in must be called inside an at block
 ```
 
+## Preview in the editor
+
+The editor plays a scene in a window, reloads it when you save, and lets you
+drag shapes to change their [params](params.md):
+
+```bash
+cargo run --release -p anicode-editor -- scenes/hello.lua
+```
+
 ## Render options
 
 ```text
