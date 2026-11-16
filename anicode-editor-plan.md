@@ -125,6 +125,8 @@ This is a change to the "Record where each param is used" data in `anicode-core`
 
 ## Phase 3: Relationships that follow over time
 
+Done (Nov 16, 2026) for `follow`, as `shape:follow(leader, offset)` on a new `Node` table of Lua methods. `next_to` and `below` need each shape's size, which Lua cannot read yet, so they wait.
+
 `dot:pos()` is read once, when the script runs. If the dot moves during the scene, a label placed from it stays behind. To follow it, the scene needs a value computed every frame:
 
 ```lua
