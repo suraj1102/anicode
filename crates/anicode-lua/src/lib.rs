@@ -158,10 +158,18 @@ impl Engine {
             .property(property)
             .ok_or_else(|| format!("{label} has no {property}"))?;
         match scene.properties.control(id, time) {
-            Control::Param {
-                param: ParamUse { param, part },
-                gain,
-            } => Ok(ParamRef {
+            Control::Param(ParamUse {
+                via: Some(other), ..
+            }) => {
+                let other = self.node_label(other);
+                Err(format!(
+                    "{label}: {property} is placed from {other}; drag that instead, or add a \
+                     param here, like pos = other:pos() + param(\"offset\", vec(1, 0))"
+                ))
+            }
+            Control::Param(ParamUse {
+                param, part, gain, ..
+            }) => Ok(ParamRef {
                 name: self.state.used_params.borrow()[param].0.clone(),
                 part,
                 gain,
@@ -557,11 +565,74 @@ mod tests {
         let engine = load(
             r#"
             local size = param("size", 0.5)
-            assert(size * 2 == 1 and 1 + size == 1.5 and -size == -0.5)
+            assert((size * 2):get() == 1 and (1 + size):get() == 1.5 and (-size):get() == -0.5)
+            assert(tostring(size) == "0.5" and "size " .. size == "size 0.5")
+            -- A param times a param is a plain number again.
+            assert(size * size == 0.25)
+            local right = size * RIGHT
+            assert(right.x:get() == 0.5 and right.y:get() == 0)
             Circle { r = size, x = param("x", 2), fill = RED }
             "#,
         )
         .unwrap();
         assert_eq!(center(&engine, 0.0), (2.0, 0.0));
+    }
+
+    fn gain(engine: &Engine, node: NodeId, property: &str) -> Result<f64, String> {
+        engine
+            .param_for(node, property, 0.0)
+            .map(|param| param.gain)
+    }
+
+    #[test]
+    fn params_are_tracked_through_arithmetic() {
+        let engine = load(
+            r#"
+            local p = param("p", 1)
+            Circle { x = p * 2 + 1, fill = RED }
+            Circle { pos = param("start", vec(1, 0)) - vec(0, 1), fill = RED }
+            Circle { x = 3 - p / 4, fill = RED }
+            Circle { x = p * p, fill = RED }
+            Circle { x = p + param("q", 1), fill = RED }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(gain(&engine, 0, "x"), Ok(2.0));
+        let start = engine.param_for(1, "y", 0.0).unwrap();
+        assert_eq!(
+            (&*start.name, start.part, start.gain),
+            ("start", ParamPart::Y, 1.0)
+        );
+        assert_eq!(gain(&engine, 2, "x"), Ok(-0.25));
+        assert!(
+            gain(&engine, 3, "x")
+                .unwrap_err()
+                .contains("a number in the code")
+        );
+        // Two params: a drag could not tell which one to change.
+        assert!(gain(&engine, 4, "x").is_err());
+    }
+
+    #[test]
+    fn positions_read_from_another_node_point_to_it() {
+        let engine = load(
+            r#"
+            local dot = Circle { pos = param("dot.start", vec(1, 0)), fill = RED }
+            local label = Circle { pos = dot:pos() + vec(-1, 0), fill = RED }
+            local tag = Circle { pos = dot:pos() + param("tag.offset", vec(0, 1)), fill = RED }
+            "#,
+        )
+        .unwrap();
+        let error = engine.param_for(1, "x", 0.0).unwrap_err();
+        assert!(
+            error.starts_with("Circle on line 3: x is placed from Circle on line 2;"),
+            "{error}"
+        );
+        // The param written in the tag's own position wins.
+        let offset = engine.param_for(2, "x", 0.0).unwrap();
+        assert_eq!((&*offset.name, offset.gain), ("tag.offset", 1.0));
+        let item = &engine.display_list(0.0, 160, 90).unwrap()[2];
+        let center = item.transform * anicode_core::kurbo::Point::ZERO;
+        assert_eq!((center.x, center.y), (80.0 + 11.25, 45.0 - 11.25));
     }
 }

@@ -560,27 +560,82 @@ fn tracked_number(lua: &Lua, value: &Value) -> Result<Tracked> {
     if let Value::UserData(data) = value
         && let Ok(number) = data.borrow::<ParamNumber>()
     {
-        let param = ParamUse {
-            param: number.param,
-            part: ParamPart::Number,
-        };
-        return Ok((number.value, Some(param)));
+        return Ok((number.value, Some(number.param)));
     }
     Ok((number(lua, value)?, None))
 }
 
-/// A vec from `param` carries the param's index in its `param` field. Vec
-/// arithmetic makes new vecs without it, so `param(...) + UP` is untracked.
+/// A vec from `param` holds a `ParamNumber` in x and in y, so vec
+/// arithmetic in the prelude keeps track of the param.
 fn tracked_vec(lua: &Lua, vector: &Table) -> Result<[Tracked; 2]> {
-    if let Some(param) = vector.raw_get::<Option<usize>>("param")? {
-        let (x, y) = vec_xy(lua, vector)?;
-        let part = |part| Some(ParamUse { param, part });
-        return Ok([(x, part(ParamPart::X)), (y, part(ParamPart::Y))]);
-    }
     Ok([
         tracked_number(lua, &vector.get::<Value>("x")?)?,
         tracked_number(lua, &vector.get::<Value>("y")?)?,
     ])
+}
+
+/// A number, as a `ParamNumber` when it is still tied to a param.
+fn tracked_value(lua: &Lua, (value, param): Tracked) -> Result<Value> {
+    match param {
+        Some(param) => Ok(Value::UserData(
+            lua.create_userdata(ParamNumber { param, value })?,
+        )),
+        None => Ok(Value::Number(value)),
+    }
+}
+
+/// The param behind `a * scale_a + b * scale_b`, when one is left. Two
+/// different params give none, since a drag could not tell which to change,
+/// unless one of them was read from another node: the one written here wins.
+fn combined(
+    a: Option<ParamUse>,
+    b: Option<ParamUse>,
+    scale_a: f64,
+    scale_b: f64,
+) -> Option<ParamUse> {
+    match (a, b) {
+        (Some(a), None) => Some(a.scaled(scale_a)),
+        (None, Some(b)) => Some(b.scaled(scale_b)),
+        (Some(a), Some(b)) if (a.param, a.part, a.via) == (b.param, b.part, b.via) => {
+            Some(ParamUse {
+                gain: a.gain * scale_a + b.gain * scale_b,
+                ..a
+            })
+        }
+        (Some(a), Some(b)) => match (a.via, b.via) {
+            (None, Some(_)) => Some(a.scaled(scale_a)),
+            (Some(_), None) => Some(b.scaled(scale_b)),
+            _ => None,
+        },
+        (None, None) => None,
+    }
+}
+
+/// Arithmetic that keeps track of a param while the result is still a
+/// number plus a multiple of it.
+fn tracked_arithmetic(lua: &Lua, method: MetaMethod, a: &Value, b: &Value) -> Result<Value> {
+    // `p * RIGHT` scales the vec, the same as `RIGHT * p`.
+    if let (MetaMethod::Mul, Value::Table(vector)) = (&method, b) {
+        let multiply: Function = vector
+            .metatable()
+            .ok_or_else(|| Error::runtime("expected a number or a vec, got a table"))?
+            .get("__mul")?;
+        return multiply.call((b, a));
+    }
+    let (x, a) = tracked_number(lua, a)?;
+    let (y, b) = tracked_number(lua, b)?;
+    let result = match method {
+        MetaMethod::Add => (x + y, combined(a, b, 1.0, 1.0)),
+        MetaMethod::Sub => (x - y, combined(a, b, 1.0, -1.0)),
+        MetaMethod::Mul => match (a, b) {
+            (Some(a), None) => (x * y, Some(a.scaled(y))),
+            (None, Some(b)) => (x * y, Some(b.scaled(x))),
+            _ => (x * y, None),
+        },
+        MetaMethod::Div => (x / y, a.filter(|_| b.is_none()).map(|a| a.scaled(1.0 / y))),
+        _ => unreachable!("only arithmetic methods are registered"),
+    };
+    tracked_value(lua, result)
 }
 
 /// `param("name", default)`: the value from the params file, or the default.
@@ -618,15 +673,20 @@ fn param(lua: &Lua, state: &State, name: String, default: &Value) -> Result<Valu
     };
     let value = used[index].1;
     drop(used);
-    match value {
-        ParamValue::Number(value) => Ok(Value::UserData(lua.create_userdata(ParamNumber {
+    let tracked = |value, part| {
+        let param = ParamUse {
             param: index,
-            value,
-        })?)),
+            part,
+            gain: 1.0,
+            via: None,
+        };
+        tracked_value(lua, (value, Some(param)))
+    };
+    match value {
+        ParamValue::Number(value) => tracked(value, ParamPart::Number),
         ParamValue::Vec(x, y) => {
-            let vector: Table = lua.globals().get::<Function>("vec")?.call((x, y))?;
-            vector.raw_set("param", index)?;
-            Ok(Value::Table(vector))
+            let (x, y) = (tracked(x, ParamPart::X)?, tracked(y, ParamPart::Y)?);
+            lua.globals().get::<Function>("vec")?.call((x, y))
         }
     }
 }
@@ -734,8 +794,22 @@ impl UserData for NodeHandle {
         });
 
         methods.add_method("pos", |lua, this, ()| {
-            let x = property_value(lua, &this.state, this.property("x"))?;
-            let y = property_value(lua, &this.state, this.property("y"))?;
+            let tracked = |name| {
+                let id = this.property(name);
+                let value = property_value(lua, &this.state, id)?;
+                // While the scene is built, the position keeps the param
+                // behind it, marked as read from this node.
+                let param = match *this.state.frame.borrow() {
+                    Some(_) => None,
+                    None => this.state.scene.borrow().properties.base_param(id),
+                };
+                let param = param.map(|param| ParamUse {
+                    via: Some(this.id),
+                    ..param
+                });
+                tracked_value(lua, (value, param))
+            };
+            let (x, y) = (tracked("x")?, tracked("y")?);
             lua.globals().get::<Function>("vec")?.call::<Value>((x, y))
         });
 
@@ -830,20 +904,45 @@ fn add_operators<T, M: UserDataMethods<T>>(methods: &mut M) {
     }
 }
 
-/// A number from `param`. It works in arithmetic like a number, and it
-/// remembers its param, so the editor can find the param behind a property.
+/// A number from `param`, or from arithmetic on one. It works in arithmetic
+/// like a number and remembers its param, so the editor can find the param
+/// behind a property. Lua does not compare it with plain numbers, so
+/// `p == 1` is false; write `p:get() == 1`.
 struct ParamNumber {
-    param: usize,
+    param: ParamUse,
     value: f64,
 }
 
 impl UserData for ParamNumber {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("get", |_, this, ()| Ok(this.value));
-        add_operators(methods);
-        methods.add_meta_method(MetaMethod::Unm, |_, this, ()| Ok(-this.value));
+        for method in [
+            MetaMethod::Add,
+            MetaMethod::Sub,
+            MetaMethod::Mul,
+            MetaMethod::Div,
+        ] {
+            methods.add_meta_function(method, move |lua, (a, b): (Value, Value)| {
+                tracked_arithmetic(lua, method, &a, &b)
+            });
+        }
+        methods.add_meta_method(MetaMethod::Unm, |lua, this, ()| {
+            tracked_value(lua, (-this.value, Some(this.param.scaled(-1.0))))
+        });
         methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
             Ok(this.value.to_string())
+        });
+        // Lets "x = " .. p work, as in vec's __tostring.
+        methods.add_meta_function(MetaMethod::Concat, |lua, (a, b): (Value, Value)| {
+            let text = |value: Value| -> Result<String> {
+                match value {
+                    Value::UserData(data) if data.is::<ParamNumber>() => {
+                        Ok(data.borrow::<ParamNumber>()?.value.to_string())
+                    }
+                    other => lua.globals().get::<Function>("tostring")?.call(other),
+                }
+            };
+            Ok(text(a)? + &text(b)?)
         });
     }
 }

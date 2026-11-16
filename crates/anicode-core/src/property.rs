@@ -31,6 +31,20 @@ impl Target {
 pub struct ParamUse {
     pub param: usize,
     pub part: ParamPart,
+    /// The value is a number plus `gain` times the param: 2 for `p * 2`.
+    pub gain: f64,
+    /// The node whose position the value was read from, like `dot` in
+    /// `dot:pos() + vec(1, 0)`. Dragging this value would move that node.
+    pub via: Option<usize>,
+}
+
+impl ParamUse {
+    pub fn scaled(self, factor: f64) -> ParamUse {
+        ParamUse {
+            gain: self.gain * factor,
+            ..self
+        }
+    }
 }
 
 /// Which part of the param the value is: all of a number param, or one
@@ -45,12 +59,10 @@ pub enum ParamPart {
 /// What sets a property's value at some time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Control {
-    /// Changing the param by 1 changes the value by `gain` at that time. Part
-    /// way through an animation to a param, the gain is the eased progress.
-    Param {
-        param: ParamUse,
-        gain: f64,
-    },
+    /// Its gain says how much the value changes, at that time, when the
+    /// param changes by 1. Part way through an animation to a param, that is
+    /// the eased progress.
+    Param(ParamUse),
     Derive,
     /// A number written in the code: the base value (`block` is `None`) or
     /// the target of an animation in that block.
@@ -102,8 +114,8 @@ impl TimedAnimation {
 #[derive(Debug, Default)]
 struct Property {
     base: f64,
-    /// The param behind the base value, and the base value's gain on it.
-    base_param: Option<(ParamUse, f64)>,
+    /// The param behind the base value.
+    base_param: Option<ParamUse>,
     derive: Option<DeriveId>,
     animations: Vec<Animation>,
     timed: Vec<TimedAnimation>,
@@ -151,11 +163,16 @@ impl Properties {
         property.base = target.apply(old);
         property.base_param = match (target, property.base_param) {
             (Target::By(_), Some(earlier)) => Some(earlier),
-            (Target::Times(factor), Some((earlier, gain))) => Some((earlier, gain * factor)),
+            (Target::Times(factor), Some(earlier)) => Some(earlier.scaled(factor)),
             // Scaling by a param multiplies it by the old value.
-            (Target::Times(_), None) => param.map(|param| (param, old)),
-            (Target::To(_) | Target::By(_), _) => param.map(|param| (param, 1.0)),
+            (Target::Times(_), None) => param.map(|param| param.scaled(old)),
+            (Target::To(_) | Target::By(_), _) => param,
         };
+    }
+
+    /// The param behind the base value, if any.
+    pub fn base_param(&self, id: PropertyId) -> Option<ParamUse> {
+        self.list[id].base_param
     }
 
     pub fn derive(&self, id: PropertyId) -> Option<DeriveId> {
@@ -254,12 +271,10 @@ impl Properties {
             let progress = timed.eased_progress(time);
             match (animation.param, animation.target) {
                 (Some(param), Target::To(_) | Target::By(_)) => {
-                    let gain = gain * progress;
-                    return Control::Param { param, gain };
+                    return Control::Param(param.scaled(gain * progress));
                 }
                 (Some(param), Target::Times(_)) => {
-                    let gain = gain * timed.from * progress;
-                    return Control::Param { param, gain };
+                    return Control::Param(param.scaled(gain * timed.from * progress));
                 }
                 (None, Target::By(_)) => {}
                 (None, Target::Times(factor)) => gain *= 1.0 + (factor - 1.0) * progress,
@@ -271,10 +286,7 @@ impl Properties {
             }
         }
         match property.base_param {
-            Some((param, base_gain)) => Control::Param {
-                param,
-                gain: gain * base_gain,
-            },
+            Some(param) => Control::Param(param.scaled(gain)),
             None => Control::Code { block: None },
         }
     }
@@ -413,14 +425,16 @@ mod tests {
     }
 
     fn param(param: usize, part: ParamPart) -> ParamUse {
-        ParamUse { param, part }
+        ParamUse {
+            param,
+            part,
+            gain: 1.0,
+            via: None,
+        }
     }
 
     fn controlled(index: usize, part: ParamPart, gain: f64) -> Control {
-        Control::Param {
-            param: param(index, part),
-            gain,
-        }
+        Control::Param(param(index, part).scaled(gain))
     }
 
     #[test]
