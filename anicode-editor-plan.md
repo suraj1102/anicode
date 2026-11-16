@@ -43,6 +43,8 @@ Done (Nov 16, 2026). Small fixes found while building the prototype. Each one is
 
 ## Phase 1: Undo and redo tree
 
+Done (Nov 16, 2026). The history has no size limit yet: one state per drag is small, so the limit waits until a file gets big.
+
 Every change the editor makes is a change to the params file, so history is a tree of params file states.
 
 **Model** (`history.rs`, no egui):
@@ -77,11 +79,16 @@ struct HistoryNode {
 - Cmd+Z and Cmd+Shift+Z (Ctrl on Debian).
 - A history panel. It shows the tree as an indented list with the label and time of each node, and the current node marked. Clicking a node jumps to that state, so you can compare two branches by clicking between them.
 
-**Saving the history.** Start with history in memory only. Then save it to `.anicode/history/<scene>.toml` under the project root (gitignored) after each change. Reopening the editor then keeps the tree. The number of nodes kept goes in `config/editor.toml`.
+**Saving the history.** Start with history in memory only. Then save it to `.anicode/history/<scene>.toml` under the project root (gitignored) after each change. Reopening the editor then keeps the tree.
 
 **Tests:** undo then a new edit makes a branch, and redo follows the newest child. Outside edits become nodes. A write followed by a reload adds no node. A saved history loads back the same.
 
 ## Phase 2: Placing objects from other objects
+
+Done (Nov 16, 2026), with two differences from the design below:
+
+- Two params in one sum (`p + q`) give an untracked value, and the message says the value is a number in the code. It does not name both params yet.
+- A tracked number stays a userdata after arithmetic, so Lua does not compare it with a plain number: `p * 2 == 1` is false. Write `(p * 2):get() == 1`. A param times a param, or any math function, gives a plain number again.
 
 Your example:
 
@@ -98,7 +105,7 @@ local label = Math { "a + b = c", pos = dot:pos() + vec(-1, 0) }
 | `param("p", 1)` | `p`, gain 1 |
 | `p + 2`, `p - 2`, `2 + p` | `p`, gain 1 |
 | `p * 3`, `p / 2`, `-p` | `p`, gain 3, 0.5, -1 |
-| `p + q` (two params) | untracked, the message names both |
+| `p + q` (two params) | untracked |
 | `p * q`, `math.sin(p)` | untracked |
 
 Vec arithmetic lives in `lua/stdlib/prelude.lua`, so vec tracking is added there per component. Number tracking stays in the `ParamNumber` metamethods in `bindings.rs`.
@@ -131,6 +138,8 @@ label.y = derive(function() return dot.y + offset.y end)
 - Dragging a followed object: run its derive functions with tracked inputs, using the same gain tracking as phase 2. Then a drag changes the offset param. Until that works, `param_for` already reports "computed by derive", which is correct.
 
 ## Phase 4: Inspector panel
+
+Done (Nov 16, 2026). The history panel sits in the same side panel. `open_command` in `config/editor.toml` is empty by default, which hides the "Open in editor" button.
 
 A side panel with two parts:
 
