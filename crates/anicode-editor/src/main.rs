@@ -3,6 +3,7 @@
 //! changes the params that place it and writes them to the params file.
 
 mod drag;
+mod history;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -10,12 +11,19 @@ use std::time::{Instant, SystemTime};
 
 use anicode_core::kurbo::{Point, Shape as _};
 use anicode_core::{DrawItem, NodeId, hit_test};
-use anicode_lua::{Config, Engine, ParamValue, load_scene, params_path, set_params};
+use anicode_lua::{
+    Config, Engine, ParamValue, Params, load_scene, params_path, read_params, save_params,
+    set_params,
+};
 use anicode_render::CpuRenderer;
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, TextureHandle};
+use eframe::egui::{
+    self, Align2, Color32, FontId, Key, KeyboardShortcut, Modifiers, Pos2, Rect, Sense, Stroke,
+    TextureHandle,
+};
 use serde::Deserialize;
 
 use drag::{Drag, Mode};
+use history::History;
 
 const CONFIG_FILE: &str = "config/editor.toml";
 
@@ -100,6 +108,7 @@ struct Editor {
     drag: Option<Drag>,
     /// What the last click or drag did, or why it could not.
     message: String,
+    history: History,
 }
 
 impl Editor {
@@ -125,9 +134,45 @@ impl Editor {
             selected: None,
             drag: None,
             message: String::new(),
+            history: History::new(Params::new()),
         };
+        editor.history = History::new(editor.file_params().unwrap_or_default());
         editor.reload();
         editor
+    }
+
+    /// What the params file holds now. A missing file holds no params.
+    fn file_params(&self) -> Result<Params, String> {
+        let path = params_path(&self.scene);
+        if path.is_file() {
+            read_params(&path)
+        } else {
+            Ok(Params::new())
+        }
+    }
+
+    /// Writes the current history state to the params file.
+    fn restore(&mut self) {
+        match save_params(&params_path(&self.scene), self.history.params()) {
+            Ok(()) => self.reload(),
+            Err(error) => self.message = error,
+        }
+    }
+
+    fn undo(&mut self) {
+        let left = self.history.current();
+        if self.history.undo() {
+            self.message = format!("Undid {}.", self.history.nodes()[left].label);
+            self.restore();
+        }
+    }
+
+    fn redo(&mut self) {
+        if self.history.redo() {
+            let label = &self.history.nodes()[self.history.current()].label;
+            self.message = format!("Redid {label}.");
+            self.restore();
+        }
     }
 
     fn watched_files(&self) -> Vec<PathBuf> {
@@ -164,6 +209,13 @@ impl Editor {
             .map(|path| modified_time(path))
             .collect();
         if times != self.file_times {
+            // The editor's own writes update file_times, so a change seen
+            // here came from somewhere else.
+            if self.drag.is_none()
+                && let Ok(params) = self.file_params()
+            {
+                self.history.record(params, "edited outside the editor");
+            }
             self.reload();
         }
     }
@@ -232,6 +284,13 @@ impl Editor {
                 self.toggle_play();
             }
             ui.label(format!("{:.2} / {:.2} s", self.time, self.duration()));
+            ui.separator();
+            if ui.button("Undo").clicked() {
+                self.undo();
+            }
+            if ui.button("Redo").clicked() {
+                self.redo();
+            }
         });
         let blocks = self
             .loaded
@@ -303,8 +362,12 @@ impl Editor {
         {
             self.drag_to(to_pixels(pos));
         }
-        if response.drag_stopped() {
-            self.drag = None;
+        if response.drag_stopped()
+            && let Some(drag) = self.drag.take()
+            && let Ok(params) = self.file_params()
+        {
+            let label = format!("drag {}", drag.param_names().join(" and "));
+            self.history.record(params, label);
         }
 
         let outline = self
@@ -406,7 +469,17 @@ impl eframe::App for Editor {
             self.render(ui.ctx());
         }
 
+        let redo = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+        let undo = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
+        // Redo first: the undo shortcut would also match Cmd+Shift+Z.
+        if ui.input_mut(|input| input.consume_shortcut(&redo)) {
+            self.redo();
+        } else if ui.input_mut(|input| input.consume_shortcut(&undo)) {
+            self.undo();
+        }
+
         egui::Panel::bottom("controls").show(ui, |ui| self.controls(ui));
+        egui::Panel::right("history").show(ui, |ui| self.history_panel(ui));
         egui::CentralPanel::default().show(ui, |ui| self.preview(ui));
 
         if self.playing {
@@ -426,6 +499,48 @@ fn load(scene: &Path, project: Option<&Path>) -> Result<Loaded, String> {
     };
     let engine = load_scene(scene, &config, &markers)?;
     Ok(Loaded { engine, config })
+}
+
+impl Editor {
+    fn history_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("History");
+        let mut jump = None;
+        egui::ScrollArea::vertical().show(ui, |ui| self.history_rows(ui, 0, 0, &mut jump));
+        if let Some(node) = jump {
+            self.history.jump(node);
+            self.message = format!("Went to {}.", self.history.nodes()[node].label);
+            self.restore();
+        }
+    }
+
+    /// One row per state, oldest first. Rows are indented only where the
+    /// tree branches, so a history without branches stays flat.
+    fn history_rows(&self, ui: &mut egui::Ui, node: usize, depth: usize, jump: &mut Option<usize>) {
+        let entry = &self.history.nodes()[node];
+        ui.horizontal(|ui| {
+            ui.add_space(depth as f32 * 12.0);
+            let text = format!("{} ({})", entry.label, time_ago(entry.when));
+            if ui
+                .selectable_label(node == self.history.current(), text)
+                .clicked()
+            {
+                *jump = Some(node);
+            }
+        });
+        let branches = entry.children.len() > 1;
+        for &child in &entry.children {
+            self.history_rows(ui, child, depth + usize::from(branches), jump);
+        }
+    }
+}
+
+fn time_ago(when: SystemTime) -> String {
+    let seconds = when.elapsed().map_or(0, |elapsed| elapsed.as_secs());
+    match seconds {
+        0..60 => format!("{seconds} s ago"),
+        60..3600 => format!("{} min ago", seconds / 60),
+        _ => format!("{} h ago", seconds / 3600),
+    }
 }
 
 fn show_value(value: ParamValue) -> String {
@@ -566,6 +681,48 @@ mod tests {
         // One screen point is about 0.02 units here.
         assert!((x - 1.0).abs() < 0.03 && (y - 0.5).abs() < 0.03, "{x} {y}");
         assert!(harness.state().message.starts_with("Wrote dot.pos"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn undo_and_redo_restore_the_params_file() {
+        let root = project(
+            "undo",
+            "Circle { r = 0.5, pos = param(\"dot.pos\", vec(0, 0)), fill = RED }\n",
+        );
+        let params_file = root.join("scene.params.lua");
+        let mut harness = open(&root.join("scene.lua"));
+        let start = screen_point(&harness, 0.0, 0.0);
+        let end = screen_point(&harness, 1.0, 0.0);
+        harness.drag_at(start);
+        harness.run_steps(1);
+        harness.hover_at(end);
+        harness.run_steps(1);
+        harness.drop_at(end);
+        harness.run_steps(1);
+        let dragged = anicode_lua::read_params(&params_file).unwrap();
+        assert!(dragged.contains_key("dot.pos"));
+
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        harness.run_steps(1);
+        assert!(anicode_lua::read_params(&params_file).unwrap().is_empty());
+        assert_eq!(harness.state().message, "Undid drag dot.pos.");
+
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+        harness.run_steps(1);
+        assert_eq!(anicode_lua::read_params(&params_file).unwrap(), dragged);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn edits_outside_the_editor_are_recorded() {
+        let root = project("outside", "Circle { r = param(\"size\", 1), fill = RED }\n");
+        let mut harness = open(&root.join("scene.lua"));
+        std::fs::write(root.join("scene.params.lua"), "return { size = 2 }\n").unwrap();
+        harness.run_steps(2);
+        let history = &harness.state().history;
+        assert_eq!(history.nodes().len(), 2);
+        assert_eq!(history.nodes()[1].label, "edited outside the editor");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
