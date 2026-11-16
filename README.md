@@ -25,8 +25,10 @@ render them again and commit the result:
 
 ```bash
 scripts/docs-media.sh
-``` The design and roadmap are in
-[anicode-build-plan.md](anicode-build-plan.md).
+```
+
+The design and roadmap are in [anicode-build-plan.md](anicode-build-plan.md),
+and the editor's plan is in [anicode-editor-plan.md](anicode-editor-plan.md).
 
 ## Quick start
 
@@ -48,17 +50,30 @@ line with the frame count. Nothing plays until you make the video.
 - `render` never deletes old frames. Run `rm -rf frames` before rendering a
   different scene.
 
+To play a scene in a window instead, and drag shapes to change their params:
+
+```bash
+cargo run --release -p anicode-editor -- examples/drag.lua
+```
+
 ## What works today
 
 - Shapes: `Rect`, `Circle`, `Line`, `Path`, `Group`, and math with `Math`
   (Typst) and `Tex` (LaTeX).
 - Animations: `at` blocks, `animate`, `fade_in`, `fade_out`, `move_to`,
   `:over`, `:ease`, and the `shift`, `scale` and `rotate` methods.
-- `Value` and `derive` for numbers computed every frame.
+- `Value` and `derive` for numbers computed every frame, and `follow` to
+  keep one shape next to another.
+- `param("name", default)`, with values in a `scene.params.lua` file next to
+  the scene.
 - Components in plain Lua, loaded with `require`.
 - `anicode render` (PNG frames) and `anicode new` (Shotcut clip file).
-- The Shotcut plugin: plays scenes, reloads on save, reads marker times,
-  shows a red bar on script errors.
+- The Shotcut plugin: plays scenes, reloads when the scene or its params
+  file is saved, reads marker times, shows a red bar on script errors.
+- `anicode-editor`: a preview window with play, scrub and block ticks.
+  Dragging a shape changes the param behind it. It has an inspector for
+  params and the selected shape, and an undo tree that is saved between
+  sessions.
 
 ## Tests
 
