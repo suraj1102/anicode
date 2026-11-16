@@ -10,9 +10,7 @@ use std::time::{Instant, SystemTime};
 
 use anicode_core::kurbo::{Point, Shape as _};
 use anicode_core::{DrawItem, NodeId, hit_test};
-use anicode_lua::{
-    Config, Engine, ParamValue, Params, load_scene, params_path, read_params, write_params,
-};
+use anicode_lua::{Config, Engine, ParamValue, load_scene, params_path, set_params};
 use anicode_render::CpuRenderer;
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, TextureHandle};
 use serde::Deserialize;
@@ -349,23 +347,14 @@ impl Editor {
         let Some(loaded) = &self.loaded else {
             return;
         };
-        let params_file = params_path(&self.scene);
-        let file = if params_file.is_file() {
-            read_params(&params_file)
-        } else {
-            Ok(Params::new())
-        };
-        let started = file.and_then(|file| {
-            Drag::start(
-                &loaded.engine,
-                &self.items[index],
-                mode,
-                point,
-                self.time,
-                file,
-                self.settings.drag.min_gain,
-            )
-        });
+        let started = Drag::start(
+            &loaded.engine,
+            &self.items[index],
+            mode,
+            point,
+            self.time,
+            self.settings.drag.min_gain,
+        );
         match started {
             Ok(drag) => {
                 self.message = format!("Dragging {}.", drag.param_names().join(" and "));
@@ -386,7 +375,7 @@ impl Editor {
             .map(|name| format!("{name} = {}", show_value(params[*name])))
             .collect();
         let params_file = params_path(&self.scene);
-        match write_params(&params_file, &params) {
+        match set_params(&params_file, &params) {
             Ok(()) => {
                 self.message = format!("Wrote {}.", written.join(", "));
                 self.reload();

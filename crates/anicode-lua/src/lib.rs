@@ -6,7 +6,7 @@ mod params;
 
 pub use anicode_core::ParamPart;
 pub use config::{Config, load_scene};
-pub use params::{ParamValue, Params, params_path, read_params, write_params};
+pub use params::{ParamValue, Params, params_path, read_params, set_params, write_params};
 
 use std::collections::HashMap;
 use std::path::Path;

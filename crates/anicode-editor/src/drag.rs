@@ -19,8 +19,6 @@ pub struct Drag {
     params: Vec<ParamRef>,
     /// Every param's value when the drag started.
     start_values: Params,
-    /// The params file when the drag started. Only dragged params change.
-    start_file: Params,
     /// Maps preview pixels to the space the node's x and y live in.
     to_parent: Affine,
     start: Point,
@@ -49,7 +47,6 @@ impl Drag {
         mode: Mode,
         cursor: Point,
         time: f64,
-        file: Params,
         min_gain: f64,
     ) -> Result<Drag, String> {
         let mut params = vec![];
@@ -72,7 +69,6 @@ impl Drag {
             mode,
             params,
             start_values: engine.params(),
-            start_file: file,
             to_parent,
             start: to_parent * cursor,
             center: to_parent * (item.transform * Point::ZERO),
@@ -87,7 +83,7 @@ impl Drag {
         names
     }
 
-    /// The params file with the cursor at `cursor`. Values are rounded to
+    /// The dragged params' values with the cursor at `cursor`, rounded to
     /// `step`.
     pub fn params_at(&self, cursor: Point, step: f64) -> Params {
         let cursor = self.to_parent * cursor;
@@ -116,11 +112,10 @@ impl Drag {
             let new_value = changed(value, param.part, |old| old + change / param.gain);
             values.insert(param.name.clone(), new_value);
         }
-        let mut file = self.start_file.clone();
-        for name in self.param_names() {
-            file.insert(name.to_string(), rounded(values[name], step));
-        }
-        file
+        self.param_names()
+            .into_iter()
+            .map(|name| (name.to_string(), rounded(values[name], step)))
+            .collect()
     }
 }
 
@@ -178,7 +173,7 @@ mod tests {
 
     fn drag(engine: &Engine, mode: Mode, time: f64, from: Point) -> Result<Drag, String> {
         let items = engine.display_list(time, WIDTH, HEIGHT).unwrap();
-        Drag::start(engine, &items[0], mode, from, time, Params::new(), MIN_GAIN)
+        Drag::start(engine, &items[0], mode, from, time, MIN_GAIN)
     }
 
     const SCENE: &str = r#"
@@ -246,17 +241,5 @@ mod tests {
             error.ends_with("rotation is a number in the code; set it with param() to drag it"),
             "{error}"
         );
-    }
-
-    #[test]
-    fn other_params_in_the_file_are_kept() {
-        let engine = load(SCENE);
-        let items = engine.display_list(0.0, WIDTH, HEIGHT).unwrap();
-        let file = Params::from([("other".into(), ParamValue::Number(3.0))]);
-        let start = pixel(2.0, 0.0);
-        let drag = Drag::start(&engine, &items[0], Mode::Move, start, 0.0, file, MIN_GAIN).unwrap();
-        let file = drag.params_at(pixel(2.0, 0.0), 0.001);
-        assert_eq!(file.len(), 2);
-        assert_eq!(file["other"], ParamValue::Number(3.0));
     }
 }
