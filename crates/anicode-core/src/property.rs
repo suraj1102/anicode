@@ -45,7 +45,12 @@ pub enum ParamPart {
 /// What sets a property's value at some time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Control {
-    Param(ParamUse),
+    /// Changing the param by 1 changes the value by `gain` at that time. Part
+    /// way through an animation to a param, the gain is the eased progress.
+    Param {
+        param: ParamUse,
+        gain: f64,
+    },
     Derive,
     /// A number written in the code: the base value (`block` is `None`) or
     /// the target of an animation in that block.
@@ -79,20 +84,26 @@ struct TimedAnimation {
 }
 
 impl TimedAnimation {
-    fn value_at(&self, time: f64) -> f64 {
+    /// How far the value has gone from `from` to `to`, 0 to 1, after easing.
+    fn eased_progress(&self, time: f64) -> f64 {
         let progress = if self.duration > 0.0 {
             ((time - self.start) / self.duration).clamp(0.0, 1.0)
         } else {
             1.0
         };
-        self.from + (self.to - self.from) * self.easing.apply(progress)
+        self.easing.apply(progress)
+    }
+
+    fn value_at(&self, time: f64) -> f64 {
+        self.from + (self.to - self.from) * self.eased_progress(time)
     }
 }
 
 #[derive(Debug, Default)]
 struct Property {
     base: f64,
-    base_param: Option<ParamUse>,
+    /// The param behind the base value, and the base value's gain on it.
+    base_param: Option<(ParamUse, f64)>,
     derive: Option<DeriveId>,
     animations: Vec<Animation>,
     timed: Vec<TimedAnimation>,
@@ -136,10 +147,14 @@ impl Properties {
     /// the earlier param, so dragging that param moves it the same way.
     pub fn change_base(&mut self, id: PropertyId, target: Target, param: Option<ParamUse>) {
         let property = &mut self.list[id];
-        property.base = target.apply(property.base);
-        property.base_param = match target {
-            Target::To(_) => param,
-            Target::By(_) | Target::Times(_) => property.base_param.or(param),
+        let old = property.base;
+        property.base = target.apply(old);
+        property.base_param = match (target, property.base_param) {
+            (Target::By(_), Some(earlier)) => Some(earlier),
+            (Target::Times(factor), Some((earlier, gain))) => Some((earlier, gain * factor)),
+            // Scaling by a param multiplies it by the old value.
+            (Target::Times(_), None) => param.map(|param| (param, old)),
+            (Target::To(_) | Target::By(_), _) => param.map(|param| (param, 1.0)),
         };
     }
 
@@ -232,11 +247,22 @@ impl Properties {
             .iter()
             .filter(|animation| time > animation.start)
             .count();
+        // Each relative animation in code on the way back scales the gain.
+        let mut gain = 1.0;
         for timed in property.timed[..started].iter().rev() {
             let animation = property.animations[timed.source];
+            let progress = timed.eased_progress(time);
             match (animation.param, animation.target) {
-                (Some(param), _) => return Control::Param(param),
-                (None, Target::By(_) | Target::Times(_)) => continue,
+                (Some(param), Target::To(_) | Target::By(_)) => {
+                    let gain = gain * progress;
+                    return Control::Param { param, gain };
+                }
+                (Some(param), Target::Times(_)) => {
+                    let gain = gain * timed.from * progress;
+                    return Control::Param { param, gain };
+                }
+                (None, Target::By(_)) => {}
+                (None, Target::Times(factor)) => gain *= 1.0 + (factor - 1.0) * progress,
                 (None, Target::To(_)) => {
                     return Control::Code {
                         block: Some(animation.block),
@@ -244,9 +270,13 @@ impl Properties {
                 }
             }
         }
-        property
-            .base_param
-            .map_or(Control::Code { block: None }, Control::Param)
+        match property.base_param {
+            Some((param, base_gain)) => Control::Param {
+                param,
+                gain: gain * base_gain,
+            },
+            None => Control::Code { block: None },
+        }
     }
 
     /// The animated value at `time`. Ignores derive; the caller handles that.
@@ -386,6 +416,13 @@ mod tests {
         ParamUse { param, part }
     }
 
+    fn controlled(index: usize, part: ParamPart, gain: f64) -> Control {
+        Control::Param {
+            param: param(index, part),
+            gain,
+        }
+    }
+
     #[test]
     fn control_finds_the_param_of_the_animation_at_the_time() {
         let mut properties = Properties::default();
@@ -395,13 +432,15 @@ mod tests {
         moved.param = Some(param(1, ParamPart::Number));
         properties.animate(x, moved);
         properties.resolve(&BLOCKS, 1.0);
-        assert_eq!(
-            properties.control(x, 1.0),
-            Control::Param(param(0, ParamPart::X))
-        );
+        assert_eq!(properties.control(x, 1.0), controlled(0, ParamPart::X, 1.0));
         assert_eq!(
             properties.control(x, 3.0),
-            Control::Param(param(1, ParamPart::Number))
+            controlled(1, ParamPart::Number, 1.0)
+        );
+        // Half way through a linear animation, the target moves it half as far.
+        assert_eq!(
+            properties.control(x, 2.5),
+            controlled(1, ParamPart::Number, 0.5)
         );
     }
 
@@ -415,13 +454,26 @@ mod tests {
         properties.animate(x, animation(1, Target::To(5.0)));
         properties.resolve(&BLOCKS, 1.0);
         assert_eq!(properties.base(x), 3.0);
-        assert_eq!(
-            properties.control(x, 1.0),
-            Control::Param(param(0, ParamPart::X))
-        );
+        assert_eq!(properties.control(x, 1.0), controlled(0, ParamPart::X, 1.0));
         assert_eq!(properties.control(x, 2.5), Control::Code { block: Some(1) });
         properties.set_base(x, 0.0);
         assert_eq!(properties.control(x, 1.0), Control::Code { block: None });
+    }
+
+    #[test]
+    fn scaling_in_code_scales_the_gain() {
+        let mut properties = Properties::default();
+        let scale = properties.add(1.0);
+        let grow = Some(param(0, ParamPart::Number));
+        properties.change_base(scale, Target::Times(2.0), grow);
+        properties.change_base(scale, Target::Times(3.0), None);
+        properties.animate(scale, animation(0, Target::Times(2.0)));
+        properties.resolve(&BLOCKS, 1.0);
+        // The base is 1 * grow * 3, and the animation doubles it by its end.
+        let grow = |gain| controlled(0, ParamPart::Number, gain);
+        assert_eq!(properties.control(scale, 0.0), grow(3.0));
+        assert_eq!(properties.control(scale, 0.5), grow(4.5));
+        assert_eq!(properties.control(scale, 1.5), grow(6.0));
     }
 
     #[test]

@@ -33,6 +33,9 @@ pub struct Settings {
 pub struct ParamRef {
     pub name: String,
     pub part: ParamPart,
+    /// Changing the param by 1 changes the property by this much at the
+    /// time asked about.
+    pub gain: f64,
 }
 
 pub struct Engine {
@@ -152,9 +155,13 @@ impl Engine {
             .property(property)
             .ok_or_else(|| format!("{label} has no {property}"))?;
         match scene.properties.control(id, time) {
-            Control::Param(ParamUse { param, part }) => Ok(ParamRef {
+            Control::Param {
+                param: ParamUse { param, part },
+                gain,
+            } => Ok(ParamRef {
                 name: self.state.used_params.borrow()[param].0.clone(),
                 part,
+                gain,
             }),
             Control::Derive => Err(format!(
                 "{label}: {property} is computed by derive, so no param sets it"
@@ -486,17 +493,21 @@ mod tests {
     fn param_for_finds_the_param_at_the_playhead() {
         let engine = load(DOT).unwrap();
         let param = |property, time| engine.param_for(0, property, time);
-        let named = |name: &str, part| {
+        let named = |name: &str, part, gain| {
             Ok(ParamRef {
                 name: name.to_string(),
                 part,
+                gain,
             })
         };
-        assert_eq!(param("x", 0.0), named("dot.start", ParamPart::X));
-        assert_eq!(param("y", 1.0), named("dot.end", ParamPart::Y));
+        assert_eq!(param("x", 0.0), named("dot.start", ParamPart::X, 1.0));
+        assert_eq!(param("y", 1.0), named("dot.end", ParamPart::Y, 1.0));
+        // Half way through move_to, the target has moved the dot half way.
+        assert_eq!(param("y", 0.5), named("dot.end", ParamPart::Y, 0.5));
         // shift by a number in code follows where move_to left the dot.
-        assert_eq!(param("y", 3.0), named("dot.end", ParamPart::Y));
-        assert_eq!(param("scale", 5.0), named("dot.grow", ParamPart::Number));
+        assert_eq!(param("y", 3.0), named("dot.end", ParamPart::Y, 1.0));
+        let grow = named("dot.grow", ParamPart::Number, 1.0);
+        assert_eq!(param("scale", 5.0), grow);
         let error = param("scale", 0.0).unwrap_err();
         assert_eq!(
             error,

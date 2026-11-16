@@ -26,6 +26,8 @@ pub struct Drag {
     start: Point,
     /// The node's origin, which scaling and rotating turn around.
     center: Point,
+    /// The node's own scale at the drag's time.
+    scale: f64,
 }
 
 fn properties(mode: Mode) -> &'static [&'static str] {
@@ -38,7 +40,9 @@ fn properties(mode: Mode) -> &'static [&'static str] {
 
 impl Drag {
     /// Starts dragging `item` from `cursor` (in preview pixels). Fails with
-    /// a message when no param sets one of the properties the drag changes.
+    /// a message when no param sets one of the properties the drag changes,
+    /// or when a param's gain is below `min_gain`, because then the shape
+    /// would barely follow the cursor.
     pub fn start(
         engine: &Engine,
         item: &DrawItem,
@@ -46,12 +50,24 @@ impl Drag {
         cursor: Point,
         time: f64,
         file: Params,
+        min_gain: f64,
     ) -> Result<Drag, String> {
-        let params = properties(mode)
-            .iter()
-            .map(|property| engine.param_for(item.node, property, time))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut params = vec![];
+        for property in properties(mode) {
+            let param = engine.param_for(item.node, property, time)?;
+            if param.gain.abs() < min_gain {
+                return Err(format!(
+                    "{}: the animation that sets {property} has barely started; \
+                     scrub later to drag it",
+                    engine.node_label(item.node)
+                ));
+            }
+            params.push(param);
+        }
         let to_parent = item.parent_transform.inverse();
+        let scale = (item.transform.determinant() / item.parent_transform.determinant())
+            .abs()
+            .sqrt();
         Ok(Drag {
             mode,
             params,
@@ -60,6 +76,7 @@ impl Drag {
             to_parent,
             start: to_parent * cursor,
             center: to_parent * (item.transform * Point::ZERO),
+            scale,
         })
     }
 
@@ -76,34 +93,28 @@ impl Drag {
         let cursor = self.to_parent * cursor;
         let from_start = self.start - self.center;
         let from_cursor = cursor - self.center;
-        let changes: Vec<Box<dyn Fn(f64) -> f64>> = match self.mode {
+        // How much each property should change, in the order of `params`.
+        let changes = match self.mode {
             Mode::Move => {
                 let moved = cursor - self.start;
-                vec![
-                    Box::new(move |x| x + moved.x),
-                    Box::new(move |y| y + moved.y),
-                ]
+                vec![moved.x, moved.y]
             }
-            // Scale and rotation params are factors or angles, so a change
-            // works the same on a base value, a target or a relative change.
             Mode::Scale => {
                 let ratio = if from_start.hypot() > 0.0 {
                     from_cursor.hypot() / from_start.hypot()
                 } else {
                     1.0
                 };
-                vec![Box::new(move |scale| scale * ratio)]
+                vec![self.scale * (ratio - 1.0)]
             }
-            Mode::Rotate => {
-                let turn = from_cursor.atan2() - from_start.atan2();
-                vec![Box::new(move |angle| angle + turn)]
-            }
+            Mode::Rotate => vec![from_cursor.atan2() - from_start.atan2()],
         };
 
         let mut values = self.start_values.clone();
         for (param, change) in self.params.iter().zip(changes) {
             let value = values[&param.name];
-            values.insert(param.name.clone(), changed(value, param.part, change));
+            let new_value = changed(value, param.part, |old| old + change / param.gain);
+            values.insert(param.name.clone(), new_value);
         }
         let mut file = self.start_file.clone();
         for name in self.param_names() {
@@ -140,6 +151,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    const MIN_GAIN: f64 = 0.05;
     const WIDTH: u32 = 160;
     const HEIGHT: u32 = 90;
     /// 160x90 pixels, 8 units tall: 11.25 pixels per unit, origin at (80, 45).
@@ -166,7 +178,7 @@ mod tests {
 
     fn drag(engine: &Engine, mode: Mode, time: f64, from: Point) -> Result<Drag, String> {
         let items = engine.display_list(time, WIDTH, HEIGHT).unwrap();
-        Drag::start(engine, &items[0], mode, from, time, Params::new())
+        Drag::start(engine, &items[0], mode, from, time, Params::new(), MIN_GAIN)
     }
 
     const SCENE: &str = r#"
@@ -198,6 +210,24 @@ mod tests {
     }
 
     #[test]
+    fn moving_during_an_animation_follows_the_cursor() {
+        let engine = load(SCENE);
+        // Half way through move_to, the dot is half way from (2, 0) to (1, 2).
+        let drag = drag(&engine, Mode::Move, 0.5, pixel(1.5, 1.0)).unwrap();
+        let file = drag.params_at(pixel(2.0, 1.0), 0.001);
+        assert_eq!(file["dot.end"], ParamValue::Vec(1.0, 2.0));
+    }
+
+    #[test]
+    fn moving_just_after_an_animation_starts_is_refused() {
+        let engine = load(SCENE);
+        let error = drag(&engine, Mode::Move, 0.01, pixel(2.0, 0.0))
+            .err()
+            .unwrap();
+        assert!(error.contains("x has barely started"), "{error}");
+    }
+
+    #[test]
     fn scaling_multiplies_the_factor() {
         let engine = load(SCENE);
         let drag = drag(&engine, Mode::Scale, 3.5, pixel(2.0, 2.0)).unwrap();
@@ -223,7 +253,8 @@ mod tests {
         let engine = load(SCENE);
         let items = engine.display_list(0.0, WIDTH, HEIGHT).unwrap();
         let file = Params::from([("other".into(), ParamValue::Number(3.0))]);
-        let drag = Drag::start(&engine, &items[0], Mode::Move, pixel(2.0, 0.0), 0.0, file).unwrap();
+        let start = pixel(2.0, 0.0);
+        let drag = Drag::start(&engine, &items[0], Mode::Move, start, 0.0, file, MIN_GAIN).unwrap();
         let file = drag.params_at(pixel(2.0, 0.0), 0.001);
         assert_eq!(file.len(), 2);
         assert_eq!(file["other"], ParamValue::Number(3.0));

@@ -32,6 +32,7 @@ struct EditorConfig {
 struct DragConfig {
     step: f64,
     hit_slop: f64,
+    min_gain: f64,
 }
 
 #[derive(Deserialize)]
@@ -362,6 +363,7 @@ impl Editor {
                 point,
                 self.time,
                 file,
+                self.settings.drag.min_gain,
             )
         });
         match started {

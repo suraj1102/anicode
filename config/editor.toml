@@ -10,6 +10,10 @@ scale = 0.5
 step = 0.001
 # Preview pixels around a thin line that still count as clicking it.
 hit_slop = 4.0
+# Part way through an animation, a drag changes its target by the move
+# divided by how far the animation has got. Below this fraction the shape
+# barely follows the target, so the editor asks you to scrub later instead.
+min_gain = 0.05
 
 [watch]
 # How often to check the scene, params and Shotcut project files for
