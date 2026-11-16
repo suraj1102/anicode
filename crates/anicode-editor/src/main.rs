@@ -30,6 +30,7 @@ const CONFIG_FILE: &str = "config/editor.toml";
 
 #[derive(Deserialize)]
 struct EditorConfig {
+    window: WindowConfig,
     preview: PreviewConfig,
     drag: DragConfig,
     watch: WatchConfig,
@@ -56,6 +57,13 @@ struct DragConfig {
 }
 
 #[derive(Deserialize)]
+struct WindowConfig {
+    width: f32,
+    height: f32,
+    inspector_share: f32,
+}
+
+#[derive(Deserialize)]
 struct PreviewConfig {
     scale: f64,
 }
@@ -78,9 +86,14 @@ fn main() -> eframe::Result {
         }
     };
     let title = format!("Anicode editor: {}", scene.display());
+    let window = &settings.window;
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([window.width, window.height]),
+        ..Default::default()
+    };
     eframe::run_native(
         &title,
-        eframe::NativeOptions::default(),
+        options,
         Box::new(|_| Ok(Box::new(Editor::new(scene, settings)))),
     )
 }
@@ -533,8 +546,20 @@ impl eframe::App for Editor {
             self.undo();
         }
 
-        egui::Panel::bottom("controls").show(ui, |ui| self.controls(ui));
-        egui::Panel::right("inspector").show(ui, |ui| self.inspector(ui));
+        // A tall window, like half a screen beside a text editor, stacks the
+        // inspector under the preview. Panels added first sit furthest out,
+        // so the inspector goes in before the controls that sit above it.
+        let size = ui.available_size();
+        if size.x < size.y {
+            egui::Panel::bottom("inspector below")
+                .resizable(true)
+                .default_size(size.y * self.settings.window.inspector_share)
+                .show(ui, |ui| self.inspector(ui));
+            egui::Panel::bottom("controls").show(ui, |ui| self.controls(ui));
+        } else {
+            egui::Panel::bottom("controls").show(ui, |ui| self.controls(ui));
+            egui::Panel::right("inspector").show(ui, |ui| self.inspector(ui));
+        }
         egui::CentralPanel::default().show(ui, |ui| self.preview(ui));
 
         if self.playing {
@@ -656,7 +681,16 @@ mod tests {
     }
 
     fn open(scene: &Path) -> Harness<'static, Editor> {
+        open_sized(scene, egui::vec2(800.0, 600.0))
+    }
+
+    fn open_sized(scene: &Path, size: egui::Vec2) -> Harness<'static, Editor> {
         let settings = EditorConfig {
+            window: WindowConfig {
+                width: 720.0,
+                height: 960.0,
+                inspector_share: 0.45,
+            },
             preview: PreviewConfig { scale: 0.25 },
             drag: DragConfig {
                 step: 0.001,
@@ -675,7 +709,7 @@ mod tests {
         };
         let scene = scene.to_path_buf();
         let mut harness = Harness::builder()
-            .with_size(egui::vec2(800.0, 600.0))
+            .with_size(size)
             .build_eframe(|_| Editor::new(scene, settings));
         harness.run_steps(2);
         harness
@@ -711,6 +745,38 @@ mod tests {
         };
         // One screen point is about 0.02 units here.
         assert!((x - 1.0).abs() < 0.03 && (y - 0.5).abs() < 0.03, "{x} {y}");
+        assert!(harness.state().message.starts_with("Wrote dot.pos"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_editor_config_parses() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/editor.toml");
+        let text = std::fs::read_to_string(path).unwrap();
+        toml::from_str::<EditorConfig>(&text).unwrap();
+    }
+
+    #[test]
+    fn tall_windows_stack_the_inspector_under_the_preview() {
+        let root = project(
+            "tall",
+            "Circle { r = 0.5, pos = param(\"dot.pos\", vec(0, 0)), fill = RED }\n",
+        );
+        let mut harness = open_sized(&root.join("scene.lua"), egui::vec2(500.0, 900.0));
+        let preview = harness.get_by_label("preview").rect();
+        let params = harness.get_by_label("Params").rect();
+        assert!(preview.bottom() <= params.top(), "{preview:?} {params:?}");
+        // The preview gets the full width.
+        assert!(preview.width() > 450.0, "{preview:?}");
+
+        let start = screen_point(&harness, 0.0, 0.0);
+        let end = screen_point(&harness, 1.0, 0.0);
+        harness.drag_at(start);
+        harness.run_steps(1);
+        harness.hover_at(end);
+        harness.run_steps(1);
+        harness.drop_at(end);
+        harness.run_steps(1);
         assert!(harness.state().message.starts_with("Wrote dot.pos"));
         std::fs::remove_dir_all(&root).unwrap();
     }

@@ -1,5 +1,15 @@
 # Settings for anicode-editor.
 
+[window]
+# Size when the editor opens, in points: tall, to sit beside a text editor
+# on half of the screen.
+width = 720.0
+height = 960.0
+# In a window taller than it is wide, the inspector goes under the preview
+# and takes this share of the height at first. Drag its top edge to change
+# it. A wider window puts the inspector on the right instead.
+inspector_share = 0.45
+
 [preview]
 # The preview renders at this fraction of the render size in anicode.toml.
 scale = 0.5
