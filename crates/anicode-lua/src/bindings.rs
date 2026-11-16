@@ -36,6 +36,8 @@ pub(crate) struct State {
     pub used_params: RefCell<Vec<(String, ParamValue)>>,
     /// Names nodes in messages, like "Circle on line 3". Indexed by NodeId.
     pub node_labels: RefCell<Vec<String>>,
+    /// The file and line that made each node. Indexed by NodeId.
+    pub node_places: RefCell<Vec<Option<(String, usize)>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -353,12 +355,18 @@ fn create_node(
         }
     };
 
-    let line = lua.inspect_stack(1, |debug| debug.current_line()).flatten();
-    let label = match line {
-        Some(line) => format!("{kind} on line {line}"),
+    let place = lua
+        .inspect_stack(1, |debug| {
+            let source = debug.source().source?.strip_prefix('@')?.to_string();
+            Some((source, debug.current_line()?))
+        })
+        .flatten();
+    let label = match &place {
+        Some((_, line)) => format!("{kind} on line {line}"),
         None => kind.to_string(),
     };
     state.node_labels.borrow_mut().push(label);
+    state.node_places.borrow_mut().push(place);
 
     let mut scene = state.scene_mut()?;
     let id = match kind {

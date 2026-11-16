@@ -11,7 +11,7 @@ pub use params::{
 };
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anicode_core::kurbo::Affine;
@@ -146,6 +146,21 @@ impl Engine {
     /// Names a node for messages, like "Circle on line 3".
     pub fn node_label(&self, node: NodeId) -> String {
         self.state.node_labels.borrow()[node].clone()
+    }
+
+    /// The file and line that made a node, if Lua reported them.
+    pub fn node_place(&self, node: NodeId) -> Option<(PathBuf, usize)> {
+        let places = self.state.node_places.borrow();
+        let (file, line) = places[node].as_ref()?;
+        Some((PathBuf::from(file), *line))
+    }
+
+    /// A node property's value at `time`, derives included.
+    pub fn property_value(&self, node: NodeId, property: &str, time: f64) -> Result<f64, String> {
+        let id = self.state.scene.borrow().nodes[node]
+            .property(property)
+            .ok_or_else(|| format!("{} has no {property}", self.node_label(node)))?;
+        self.at_time(time, |_, value| value(id))
     }
 
     /// The param that sets `property` of `node` at `time`: the one behind
@@ -582,6 +597,14 @@ mod tests {
         engine
             .param_for(node, property, 0.0)
             .map(|param| param.gain)
+    }
+
+    #[test]
+    fn nodes_know_where_they_were_made_and_their_values() {
+        let engine = load(DOT).unwrap();
+        assert_eq!(engine.node_place(0), Some((PathBuf::from("test.lua"), 2)));
+        assert_eq!(engine.property_value(0, "y", 0.5), Ok(0.0));
+        assert_eq!(engine.property_value(0, "x", 2.0), Ok(-1.0));
     }
 
     #[test]
